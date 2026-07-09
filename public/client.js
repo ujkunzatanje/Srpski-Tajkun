@@ -448,6 +448,9 @@ function renderBoard() {
     const priceText = isPurchasable ? money(tile.price) : (tile.amount ? money(tile.amount) : tile.text || "");
     const icon = isPurchasable ? tile.icon : tile.emoji;
     const groupStyle = tile.type === "property" ? `style="--group-color:${tile.color}"` : "";
+    const buildingMarker = tile.type === "property" && (tile.houses || 0) > 0
+      ? `<div class="building-marker">${tile.houses === 5 ? "🏨" : `🏠${tile.houses}`}</div>`
+      : "";
     const bottomContent = isOwnedPurchasable
       ? `<div class="owned-strip" style="--owner-color:${ownerColor}"><span>${safeText(ownerName)}</span></div>`
       : `<div class="tile-bottom"><span class="tile-price">${safeText(priceText)}</span></div>`;
@@ -456,6 +459,7 @@ function renderBoard() {
       ${tile.type === "property" ? `<div class="group-glow" ${groupStyle}></div>` : ""}
       <div class="tile-name">${safeText(tile.name)}</div>
       <div class="tile-icon-slot">${icon || ""}</div>
+      ${buildingMarker}
       ${bottomContent}
     `;
   });
@@ -839,6 +843,31 @@ function declareBankruptcy() {
   socket.emit("game:bankrupt");
 }
 
+function changeBuilding(tileIndex, direction) {
+  if (!socket || !socket.connected) return showError("Socket is not connected yet.");
+  socket.emit("game:building", { tileIndex, direction });
+}
+
+function getBuildingLabel(houses) {
+  const level = Number(houses) || 0;
+  if (level <= 0) return "No buildings";
+  if (level === 5) return "Hotel";
+  return `${level} house${level === 1 ? "" : "s"}`;
+}
+
+function canBuildClient(tile, ownerIndex) {
+  if (!tile || tile.type !== "property") return { ok: false, reason: "Only city properties can have buildings." };
+  const player = players[ownerIndex];
+  if (!player || player.bankrupt) return { ok: false, reason: "Owner is bankrupt." };
+  if (tile.owner !== ownerIndex) return { ok: false, reason: "You do not own this property." };
+  if (!ownsFullGroup(ownerIndex, tile.group)) return { ok: false, reason: "Own the full color set first." };
+  if (player.money <= 0) return { ok: false, reason: "Fix debt before building." };
+  if ((tile.houses || 0) >= 5) return { ok: false, reason: "Hotel already built." };
+  const cost = (tile.houses || 0) === 4 ? tile.hotelCost : tile.houseCost;
+  if (player.money < cost) return { ok: false, reason: "Not enough money." };
+  return { ok: true, reason: "OK" };
+}
+
 function showTileInfo(index) {
   selectedTileIndex = index;
   renderBoard();
@@ -892,6 +921,33 @@ function getTileInfoHtml(tile, index) {
       ? "Full set owned"
       : `Full set: ${groupCities}`;
 
+    const myIndex = myPlayerIndex();
+    const ownerIndex = tile.owner;
+    const isMine = ownerIndex === myIndex;
+    const hasFullSet = ownerIndex !== null && ownsFullGroup(ownerIndex, tile.group);
+    const currentLevel = Math.min(5, Math.max(0, Number(tile.houses) || 0));
+    const activeRent = tile.rentLevels[currentLevel] || tile.rentLevels[0];
+    const nextCost = currentLevel === 4 ? tile.hotelCost : tile.houseCost;
+    const sellRefund = Math.floor((currentLevel === 5 ? tile.hotelCost : tile.houseCost) / 2);
+    const buildCheck = isMine ? canBuildClient(tile, myIndex) : { ok: false, reason: "Only owner can build." };
+    const canSellBuilding = isMine && currentLevel > 0;
+    const buildingControls = isMine
+      ? `<div class="building-controls">
+          <div class="building-status">
+            <span>Buildings</span>
+            <strong>${safeText(getBuildingLabel(currentLevel))}</strong>
+            <small>Current rent: ${money(activeRent)}</small>
+          </div>
+          ${hasFullSet
+            ? `<div class="building-buttons">
+                <button onclick="changeBuilding(${index}, -1)" ${canSellBuilding ? "" : "disabled"}>▼ Sell ${currentLevel === 5 ? "hotel" : "house"}<small>+${money(sellRefund)}</small></button>
+                <button onclick="changeBuilding(${index}, 1)" ${buildCheck.ok ? "" : "disabled"}>▲ ${currentLevel === 4 ? "Build hotel" : "Build house"}<small>-${money(nextCost)}</small></button>
+              </div>
+              <p class="building-note">Each ▲ adds one house. After 4 houses, ▲ builds a hotel.</p>`
+            : `<p class="building-note blocked">Own the full ${safeText(tile.group)} set before building.</p>`}
+        </div>`
+      : "";
+
     return `
       ${closeButton}
       <div class="info-card property-card" style="--card-accent:${tile.color}">
@@ -902,12 +958,12 @@ function getTileInfoHtml(tile, index) {
 
         <div class="info-table">
           <div class="info-row info-head"><span>when</span><span>get</span></div>
-          <div class="info-row"><span>with rent</span><strong>${money(tile.rentLevels[0])}</strong></div>
-          <div class="info-row"><span>with one house</span><strong>${money(tile.rentLevels[1])}</strong></div>
-          <div class="info-row"><span>with two houses</span><strong>${money(tile.rentLevels[2])}</strong></div>
-          <div class="info-row"><span>with three houses</span><strong>${money(tile.rentLevels[3])}</strong></div>
-          <div class="info-row"><span>with four houses</span><strong>${money(tile.rentLevels[4])}</strong></div>
-          <div class="info-row"><span>with a hotel</span><strong>${money(tile.rentLevels[5])}</strong></div>
+          <div class="info-row ${currentLevel === 0 ? "active-rent-row" : ""}"><span>with rent</span><strong>${money(tile.rentLevels[0])}</strong></div>
+          <div class="info-row ${currentLevel === 1 ? "active-rent-row" : ""}"><span>with one house</span><strong>${money(tile.rentLevels[1])}</strong></div>
+          <div class="info-row ${currentLevel === 2 ? "active-rent-row" : ""}"><span>with two houses</span><strong>${money(tile.rentLevels[2])}</strong></div>
+          <div class="info-row ${currentLevel === 3 ? "active-rent-row" : ""}"><span>with three houses</span><strong>${money(tile.rentLevels[3])}</strong></div>
+          <div class="info-row ${currentLevel === 4 ? "active-rent-row" : ""}"><span>with four houses</span><strong>${money(tile.rentLevels[4])}</strong></div>
+          <div class="info-row ${currentLevel === 5 ? "active-rent-row" : ""}"><span>with a hotel</span><strong>${money(tile.rentLevels[5])}</strong></div>
         </div>
 
         <div class="info-divider"></div>
@@ -916,6 +972,7 @@ function getTileInfoHtml(tile, index) {
           <div><span>🏠 House</span><strong>${money(tile.houseCost)}</strong></div>
           <div><span>🏨 Hotel</span><strong>${money(tile.hotelCost)}</strong></div>
         </div>
+        ${buildingControls}
       </div>
     `;
   }

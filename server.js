@@ -5,7 +5,7 @@ const { Server } = require('socket.io');
 
 const PORT = process.env.PORT || 3000;
 const START_BONUS = 200;
-const STARTING_MONEY = 1500;
+const STARTING_MONEY = 3000;
 const MAX_PLAYERS = 4;
 const ROOM_IDLE_DELETE_MS = 30 * 60 * 1000;
 const ENDED_ROOM_DELETE_MS = 5 * 60 * 1000;
@@ -294,6 +294,19 @@ function touchRoom(room) {
   room.lastActivity = Date.now();
 }
 
+function reconnectSeat(socket, room, player, logMessage) {
+  player.socketId = socket.id;
+  player.connected = true;
+  player.lastSeen = Date.now();
+  socket.join(room.code);
+  socket.data.roomCode = room.code;
+  socket.data.playerId = player.id;
+  touchRoom(room);
+  addLog(room, logMessage || `${player.name} reconnected.`);
+  socket.emit('room:joined', { roomCode: room.code, playerId: player.id, isHost: room.hostId === player.id });
+  emitRoom(room);
+}
+
 io.on('connection', socket => {
   socket.on('room:create', (payload = {}) => {
     const playerId = payload.playerId || makePlayerId();
@@ -309,7 +322,27 @@ io.on('connection', socket => {
   socket.on('room:join', (payload = {}) => {
     const room = getRoom(payload.roomCode);
     if (!room) return emitError(socket, 'Room not found.');
-    if (room.status !== 'lobby') return emitError(socket, 'This game already started.');
+
+    const savedPlayerId = payload.playerId ? String(payload.playerId) : '';
+    const savedPlayer = savedPlayerId ? findPlayer(room, savedPlayerId) : null;
+    if (savedPlayer && !savedPlayer.bankrupt) {
+      reconnectSeat(socket, room, savedPlayer, `${savedPlayer.name} rejoined the room.`);
+      return;
+    }
+
+    if (room.status !== 'lobby') {
+      const sameNameDisconnected = room.players.filter(player =>
+        !player.bankrupt && !player.connected && cleanName(player.name).toLowerCase() === cleanName(payload.name).toLowerCase()
+      );
+
+      if (sameNameDisconnected.length === 1) {
+        reconnectSeat(socket, room, sameNameDisconnected[0], `${sameNameDisconnected[0].name} rejoined the room.`);
+        return;
+      }
+
+      return emitError(socket, 'This game already started. Use Reconnect if this was your seat.');
+    }
+
     if (room.players.length >= MAX_PLAYERS) return emitError(socket, 'Room is full.');
 
     const colorTaken = room.players.some(player => player.color === payload.color && !player.bankrupt);
@@ -332,16 +365,8 @@ io.on('connection', socket => {
     if (!room) return emitError(socket, 'Previous room is gone.');
     const player = findPlayer(room, payload.playerId);
     if (!player) return emitError(socket, 'Could not find your old seat in that room.');
-    player.socketId = socket.id;
-    player.connected = true;
-    player.lastSeen = Date.now();
-    socket.join(room.code);
-    socket.data.roomCode = room.code;
-    socket.data.playerId = player.id;
-    touchRoom(room);
-    addLog(room, `${player.name} reconnected.`);
-    socket.emit('room:joined', { roomCode: room.code, playerId: player.id, isHost: room.hostId === player.id });
-    emitRoom(room);
+    if (player.bankrupt) return emitError(socket, 'That seat is already bankrupt.');
+    reconnectSeat(socket, room, player, `${player.name} reconnected.`);
   });
 
   socket.on('game:start', () => {
@@ -523,6 +548,43 @@ io.on('connection', socket => {
     trade.status = 'cancelled';
     room.trades = room.trades.filter(item => item.status === 'pending');
     addLog(room, `${from?.name || 'Player'} cancelled their trade offer.`);
+    touchRoom(room);
+    emitRoom(room);
+  });
+
+  socket.on('game:building', (payload = {}) => {
+    const room = getRoom(socket.data.roomCode);
+    if (!room) return emitError(socket, 'Room not found.');
+    if (room.status !== 'playing' || room.gameOver) return emitError(socket, 'Game is not active.');
+
+    const playerIndex = findPlayerIndex(room, socket.data.playerId);
+    if (playerIndex < 0) return emitError(socket, 'You are not in this room.');
+
+    const direction = Number(payload.direction) >= 0 ? 1 : -1;
+    const tileIndex = Number(payload.tileIndex);
+    if (!Number.isInteger(tileIndex) || tileIndex < 0 || tileIndex >= room.tiles.length) return emitError(socket, 'Invalid tile.');
+
+    const player = room.players[playerIndex];
+    const tile = room.tiles[tileIndex];
+    const validation = validateBuildingAction(room, playerIndex, tileIndex, direction);
+    if (!validation.ok) return emitError(socket, validation.reason);
+
+    if (direction > 0) {
+      const cost = tile.houses === 4 ? tile.hotelCost : tile.houseCost;
+      player.money -= cost;
+      tile.houses += 1;
+      const buildingName = tile.houses === 5 ? 'hotel' : `house ${tile.houses}`;
+      addLog(room, `${player.name} built ${buildingName} on ${tile.name} for $${cost}.`);
+    } else {
+      const refund = Math.floor((tile.houses === 5 ? tile.hotelCost : tile.houseCost) / 2);
+      const removedName = tile.houses === 5 ? 'hotel' : 'house';
+      tile.houses -= 1;
+      player.money += refund;
+      addLog(room, `${player.name} sold one ${removedName} from ${tile.name} and received $${refund}.`);
+    }
+
+    checkDebt(room, player);
+    room.actionText = `${player.name} updated buildings on ${tile.name}.`;
     touchRoom(room);
     emitRoom(room);
   });
@@ -764,6 +826,33 @@ function moveToNextActivePlayer(room) {
     room.currentPlayerIndex = (room.currentPlayerIndex + 1) % room.players.length;
     if (!room.players[room.currentPlayerIndex].bankrupt) return;
   }
+}
+
+function validateBuildingAction(room, playerIndex, tileIndex, direction) {
+  const player = room.players[playerIndex];
+  const tile = room.tiles[tileIndex];
+  if (!player || player.bankrupt) return { ok: false, reason: 'You are bankrupt.' };
+  if (!tile || tile.type !== 'property') return { ok: false, reason: 'Only city properties can have buildings.' };
+  if (tile.owner !== playerIndex) return { ok: false, reason: 'You do not own this property.' };
+  if (!ownsFullGroup(room, playerIndex, tile.group)) return { ok: false, reason: 'You need the full color set before building.' };
+
+  tile.houses = Math.min(5, Math.max(0, Number(tile.houses) || 0));
+
+  if (direction > 0) {
+    if (player.money <= 0) return { ok: false, reason: 'Fix debt before building.' };
+    if (tile.houses >= 5) return { ok: false, reason: 'This property already has a hotel.' };
+    const cost = tile.houses === 4 ? tile.hotelCost : tile.houseCost;
+    if (player.money < cost) return { ok: false, reason: 'Not enough money to build.' };
+  } else {
+    if (tile.houses <= 0) return { ok: false, reason: 'There is nothing to sell on this property.' };
+  }
+
+  return { ok: true, reason: 'OK' };
+}
+
+function ownsFullGroup(room, ownerIndex, groupName) {
+  const groupTiles = room.tiles.filter(tile => tile.type === 'property' && tile.group === groupName);
+  return groupTiles.length > 0 && groupTiles.every(tile => tile.owner === ownerIndex);
 }
 
 function getTileRent(room, tile, diceTotal) {
