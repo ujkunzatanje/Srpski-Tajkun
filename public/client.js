@@ -1,5 +1,6 @@
-const START_BONUS = 200;
-const CURRENCY = "$";
+const PASS_START_BONUS = 200;
+const LAND_START_BONUS = 300;
+const CURRENCY = "€";
 const MOVE_STEP_MS = 185;
 const DICE_ANIMATION_MS = 1000;
 
@@ -28,6 +29,12 @@ let heartbeatTimer = null;
 let pendingState = null;
 let vacationPot = 0;
 let jailFee = 60;
+let canRollAgain = false;
+let doubleRollCount = 0;
+let timerPhase = null;
+let turnDeadline = null;
+let timerInterval = null;
+let joinedByRoomLink = false;
 let unavailableColors = [];
 let selectedPlayerColor = "#2f6bff";
 let peekTimer = null;
@@ -76,6 +83,8 @@ const lobbyPlayers = document.getElementById("lobbyPlayers");
 const hostStartBtn = document.getElementById("hostStartBtn");
 const copyRoomBtn = document.getElementById("copyRoomBtn");
 const leaveRoomBtn = document.getElementById("leaveRoomBtn");
+const joinLinkNotice = document.getElementById("joinLinkNotice");
+const turnTimer = document.getElementById("turnTimer");
 
 createRoomBtn.addEventListener("click", createRoom);
 joinRoomBtn.addEventListener("click", joinRoom);
@@ -158,6 +167,12 @@ function connectSocket() {
 
   socket.on("room:error", message => showError(message));
 
+  socket.on("room:kicked", message => {
+    showError(message || "Izbačen si iz sobe.", 3500);
+    localStorage.removeItem("serbiaPropertyOnlineSession");
+    setTimeout(() => { window.location.href = window.location.pathname; }, 900);
+  });
+
   socket.on("room:peekResult", payload => {
     const currentCode = cleanRoomCode(roomCodeInput.value);
     if (payload.roomCode && currentCode && payload.roomCode !== currentCode) return;
@@ -217,7 +232,10 @@ function readRoomFromUrl() {
   const params = new URLSearchParams(window.location.search);
   const code = cleanRoomCode(params.get("room"));
   if (code) {
+    joinedByRoomLink = true;
     roomCodeInput.value = code;
+    createRoomBtn.classList.add("hidden");
+    if (joinLinkNotice) joinLinkNotice.classList.remove("hidden");
     setTimeout(requestRoomPeek, 350);
   }
 }
@@ -350,6 +368,10 @@ function applyState(state, options = {}) {
   trades = state.trades || [];
   vacationPot = Number(state.vacationPot) || 0;
   jailFee = Number(state.jailFee) || 60;
+  canRollAgain = Boolean(state.canRollAgain);
+  doubleRollCount = Number(state.doubleRollCount) || 0;
+  timerPhase = state.timerPhase || null;
+  turnDeadline = state.turnDeadline || null;
   roomStatus = state.status || "lobby";
   hostPlayerId = state.hostId || null;
   isHost = state.hostId === myPlayerId;
@@ -480,6 +502,7 @@ function renderAll() {
   renderTrades();
   renderLog();
   renderControls();
+  renderTurnTimer();
   renderTileInfoCard();
 }
 
@@ -494,10 +517,11 @@ function renderLobby() {
         <span class="player-dot" style="--player-color:${player.color}"></span>
         ${safeText(player.name)}
       </div>
-      <div>
+      <div class="lobby-player-actions">
         ${player.id === myPlayerId ? `<span class="you-pill">Ti</span>` : ""}
         ${player.id === roomHostId() ? `<span class="host-pill">Host</span>` : ""}
         ${!player.connected ? `<span class="offline-pill">Offline</span>` : ""}
+        ${isHost && player.id !== myPlayerId ? `<button class="kick-button" onclick="kickPlayer('${player.id}', '${escapeJsString(player.name)}')">Izbaci</button>` : ""}
       </div>
     </div>
   `).join("");
@@ -624,18 +648,9 @@ function getTileCenter(tileIndex, playerIndex) {
   if (!tileEl) return { x: 0, y: 0 };
   const boardRect = board.getBoundingClientRect();
   const tileRect = tileEl.getBoundingClientRect();
-  const offsetAmount = Math.max(8, Math.min(tileRect.width, tileRect.height) * 0.20);
-  const offsets = [
-    { x: -offsetAmount, y: -offsetAmount },
-    { x: offsetAmount, y: -offsetAmount },
-    { x: -offsetAmount, y: offsetAmount },
-    { x: offsetAmount, y: offsetAmount }
-  ];
-  const offset = offsets[playerIndex] || { x: 0, y: 0 };
-
   return {
-    x: tileRect.left - boardRect.left + tileRect.width / 2 + offset.x,
-    y: tileRect.top - boardRect.top + tileRect.height / 2 + offset.y
+    x: tileRect.left - boardRect.left + tileRect.width / 2,
+    y: tileRect.top - boardRect.top + tileRect.height / 2
   };
 }
 
@@ -650,12 +665,11 @@ function renderPlayers() {
     const mineClass = player.id === myPlayerId ? " mine" : "";
     const status = player.bankrupt ? "Bankrot" : player.money <= 0 ? "Dug" : player.inJail ? "Pritvor" : !player.connected ? "Offline" : index === currentPlayerIndex && roomStatus === "playing" && !gameOver ? "Potez" : "Čeka";
     const canDeclareSelfBankruptcy = player.id === myPlayerId && !player.bankrupt && roomStatus === "playing";
+    const canHostKick = isHost && player.id !== myPlayerId && !player.bankrupt && (roomStatus === "playing" || roomStatus === "lobby");
     const debtMessage = !player.bankrupt && player.money <= 0
       ? (player.id === myPlayerId ? `<div class="debt-warning">Moraš iznad ${money(0)} trgovinom ili proglasi bankrot.</div>` : `<div class="debt-warning">Čeka se da ovaj igrač trguje ili proglasi bankrot.</div>`)
       : "";
-    const debtTools = canDeclareSelfBankruptcy
-      ? `${debtMessage}<button class="bankrupt-button" onclick="declareBankruptcy()">🏳 Proglasi bankrot</button>`
-      : debtMessage;
+    const debtTools = `${debtMessage}${canDeclareSelfBankruptcy ? `<button class="bankrupt-button" onclick="declareBankruptcy()">🏳 Proglasi bankrot</button>` : ""}${canHostKick ? `<button class="kick-button full" onclick="kickPlayer('${player.id}', '${escapeJsString(player.name)}')">Izbaci igrača</button>` : ""}`;
 
     return `
       <div class="player-card${currentClass}${bankruptClass}${debtClass}${disconnectedClass}${mineClass}">
@@ -681,6 +695,26 @@ function renderPlayers() {
 function renderLog() {
   logPanel.innerHTML = logs.map(log => `<div class="log-item">${safeText(log)}</div>`).join("");
 }
+
+function renderTurnTimer() {
+  if (!turnTimer) return;
+  if (!turnDeadline || roomStatus !== "playing" || gameOver) {
+    turnTimer.classList.add("hidden");
+    return;
+  }
+  const remaining = Math.max(0, Math.ceil((Number(turnDeadline) - Date.now()) / 1000));
+  const label = timerPhase === "end" ? "Završi potez" : timerPhase === "extraRoll" ? "Baci opet" : "Baci kockice";
+  turnTimer.textContent = `${label}: ${remaining}s`;
+  turnTimer.classList.toggle("danger", remaining <= 10);
+  turnTimer.classList.remove("hidden");
+}
+
+function ensureTimerLoop() {
+  if (timerInterval) return;
+  timerInterval = setInterval(renderTurnTimer, 250);
+}
+
+ensureTimerLoop();
 
 function renderControls() {
   const player = players[currentPlayerIndex];
@@ -716,7 +750,7 @@ function renderControls() {
     !isAnimating
   );
 
-  currentPlayerText.textContent = gameOver ? "Kraj igre" : roomStatus === "lobby" ? "Čekaonica" : `${player?.name || "Igrač"}${player?.inJail ? " · pritvor" : ""}`;
+  currentPlayerText.textContent = gameOver ? "Kraj igre" : roomStatus === "lobby" ? "Čekaonica" : `${player?.name || "Igrač"}${player?.inJail ? " · pritvor" : ""}${canRollAgain ? " · duple" : ""}`;
   actionTextEl.textContent = actionText;
 
   rollBtn.classList.toggle("hidden", inJailTurn);
@@ -724,7 +758,8 @@ function renderControls() {
   jailPayBtn.classList.toggle("hidden", !inJailTurn);
   jailPayBtn.textContent = `Plati ${money(jailFee)}`;
 
-  rollBtn.disabled = !isMyTurn || diceRolled || gameOver || isAnimating || !player || player.bankrupt || blockedByDebt || player.inJail;
+  rollBtn.disabled = !isMyTurn || (diceRolled && !canRollAgain) || gameOver || isAnimating || !player || player.bankrupt || blockedByDebt || player.inJail;
+  rollBtn.textContent = canRollAgain && isMyTurn ? "Baci opet" : "Baci kockice";
   jailRollBtn.disabled = !inJailTurn || isAnimating;
   jailPayBtn.disabled = !inJailTurn || isAnimating;
   endTurnBtn.disabled = !isMyTurn || !diceRolled || gameOver || isAnimating || blockedByDebt;
@@ -1038,6 +1073,13 @@ function closeTradeModal() {
   tradeModal.innerHTML = "";
 }
 
+function kickPlayer(playerId, playerName) {
+  if (!isHost || !playerId || playerId === myPlayerId) return;
+  const ok = confirm(`Izbaciti igrača ${playerName || "Igrač"}? Ako je igra počela, njegova polja se vraćaju banci.`);
+  if (!ok) return;
+  socket.emit("game:kick", { playerId });
+}
+
 function declareBankruptcy() {
   const me = players[myPlayerIndex()];
   if (!me || me.bankrupt || roomStatus !== "playing") return;
@@ -1232,7 +1274,7 @@ function getTileInfoHtml(tile, index) {
   if (tile.type === "event" || tile.type === "treasure") return makeSimpleInfoCard(tile, tile.type === "event" ? "Karta" : "Blago", "Izvuci kartu i odmah primeni efekat.");
   if (tile.type === "jail") return makeSimpleInfoCard(tile, "Pritvor", `Ako staneš ovde normalno, samo si u prolazu. Ako si poslat u pritvor, sledeći potez plaćaš ${money(jailFee)} ili bacaš za duple.`);
   if (tile.type === "goToJail") return makeSimpleInfoCard(tile, "Pritvor", `Ovo polje šalje igrača direktno u pritvor. Izlaz je ${money(jailFee)} ili duple kockice.`);
-  if (tile.type === "start") return makeSimpleInfoCard(tile, "START", `Prođi ili stani na START i dobijaš ${money(START_BONUS)}.`);
+  if (tile.type === "start") return makeSimpleInfoCard(tile, "START", `Ako prođeš START dobijaš ${money(PASS_START_BONUS)}. Ako staneš tačno na START dobijaš ${money(LAND_START_BONUS)}.`);
 
   if (tile.type === "rest") return makeSimpleInfoCard(tile, "Odmor", vacationPot > 0 ? `U fondu je ${money(vacationPot)}. Ko stane ovde, dobija ceo fond.` : "Fond je prazan.");
 
@@ -1294,6 +1336,15 @@ function sleep(ms) {
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
+}
+
+function escapeJsString(value) {
+  return String(value || "")
+    .replaceAll("\\", "\\\\")
+    .replaceAll("'", "\\'")
+    .replaceAll('"', '\\"')
+    .replaceAll("\n", " ")
+    .replaceAll("\r", " ");
 }
 
 function safeText(value) {

@@ -5,7 +5,10 @@ const crypto = require('crypto');
 const { Server } = require('socket.io');
 
 const PORT = process.env.PORT || 3000;
-const START_BONUS = 200;
+const PASS_START_BONUS = 200;
+const LAND_START_BONUS = 300;
+const TURN_TIMER_MS = 60 * 1000;
+const CURRENCY = '€';
 const STARTING_MONEY = 3000;
 const MAX_PLAYERS = 4;
 const ROOM_IDLE_DELETE_MS = 30 * 60 * 1000;
@@ -24,6 +27,10 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.get('/health', (_req, res) => res.status(200).json({ ok: true, rooms: rooms.size }));
 
 const rooms = new Map();
+
+function money(amount) {
+  return `${CURRENCY}${amount}`;
+}
 
 function cityDataByBoardOrder() {
   return [
@@ -113,7 +120,7 @@ function makeTiles() {
   const cities = cityDataByBoardOrder();
   let p = 0;
   return [
-    { type: 'start', name: 'START', emoji: '▶', text: `Uzmi $${START_BONUS}` },
+    { type: 'start', name: 'START', emoji: '▶', text: `Stani ${money(LAND_START_BONUS)} / prođi ${money(PASS_START_BONUS)}` },
     makeProperty(cities[p++]),
     { type: 'treasure', name: 'Blago', emoji: '🎁', text: 'Izvuci kartu' },
     makeProperty(cities[p++]),
@@ -151,37 +158,37 @@ function makeTiles() {
     makeTransport('Aerodrom Nikola Tesla', '✈️'),
     { type: 'event', name: 'Karta', emoji: '?', text: 'Izvuci kartu' },
     makeProperty(cities[p++]),
-    { type: 'tax', name: 'Porez na luksuz', emoji: '💎', amount: 140, text: 'Plati $140 u Odmor' },
+    { type: 'tax', name: 'Porez na luksuz', emoji: '💎', amount: 140, text: `Plati ${money(140)} u Odmor` },
     makeProperty(cities[p++])
   ];
 }
 
 function makeEventDeck() {
   const cards = [
-    { text: 'Dodatni posao. Uzmi $100.', effect: (room, player, paths) => addMoney(room, player, 100, 'dodatni posao') },
-    { text: 'Kazna za parking. Plati $80.', effect: (room, player, paths) => payBank(room, player, 80, 'kazna za parking') },
+    { text: 'Dodatni posao. Uzmi €100.', effect: (room, player, paths) => addMoney(room, player, 100, 'dodatni posao') },
+    { text: 'Kazna za parking. Plati €80.', effect: (room, player, paths) => payBank(room, player, 80, 'kazna za parking') },
     { text: 'Brz put autoputem. Pomeri se 3 polja napred.', effect: (room, player, paths) => { movePlayer(room, player, 3, paths); handleTile(room, player, paths); } },
     { text: 'Radovi na putu. Vrati se 2 polja nazad.', effect: (room, player, paths) => { movePlayer(room, player, -2, paths); handleTile(room, player, paths); } },
-    { text: 'Greška banke u tvoju korist. Uzmi $150.', effect: (room, player, paths) => addMoney(room, player, 150, 'greška banke') },
-    { text: 'Neočekivan račun. Plati $120.', effect: (room, player, paths) => payBank(room, player, 120, 'neočekivan račun') },
-    { text: 'Autobus do STARTA. Uzmi $200.', effect: (room, player, paths) => directMove(room, player, 0, paths, true) },
-    { text: 'Prijatelji su pomogli. Svaki aktivan igrač ti daje $30.', effect: (room, player) => {
+    { text: 'Greška banke u tvoju korist. Uzmi €150.', effect: (room, player, paths) => addMoney(room, player, 150, 'greška banke') },
+    { text: 'Neočekivan račun. Plati €120.', effect: (room, player, paths) => payBank(room, player, 120, 'neočekivan račun') },
+    { text: 'Autobus do STARTA. Uzmi €300.', effect: (room, player, paths) => directMove(room, player, 0, paths, true) },
+    { text: 'Prijatelji su pomogli. Svaki aktivan igrač ti daje €30.', effect: (room, player) => {
       room.players.forEach(other => {
         if (other.id !== player.id && !other.bankrupt) {
           other.money -= 30;
           player.money += 30;
-          addLog(room, `${other.name} je dao $30 igraču ${player.name}.`);
+          addLog(room, `${other.name} je dao €30 igraču ${player.name}.`);
           checkDebt(room, other);
         }
       });
       checkDebt(room, player);
     } },
-    { text: 'Častiš sve. Plati svakom aktivnom igraču $25.', effect: (room, player) => {
+    { text: 'Častiš sve. Plati svakom aktivnom igraču €25.', effect: (room, player) => {
       room.players.forEach(other => {
         if (other.id !== player.id && !other.bankrupt) {
           player.money -= 25;
           other.money += 25;
-          addLog(room, `${player.name} je dao $25 igraču ${other.name}.`);
+          addLog(room, `${player.name} je dao €25 igraču ${other.name}.`);
         }
       });
       checkDebt(room, player);
@@ -213,7 +220,12 @@ function createRoom(hostPlayer) {
     createdAt: Date.now(),
     lastActivity: Date.now(),
     endedAt: null,
-    vacationPot: 0
+    vacationPot: 0,
+    canRollAgain: false,
+    doubleRollCount: 0,
+    timerPhase: null,
+    turnDeadline: null,
+    turnTimerHandle: null
   };
   addLog(room, `${hostPlayer.name} je napravio sobu ${code}.`);
   rooms.set(code, room);
@@ -232,6 +244,7 @@ function makePlayer({ id, socketId, name, color }) {
     inDebt: false,
     inJail: false,
     connected: true,
+    kicked: false,
     lastSeen: Date.now()
   };
 }
@@ -264,7 +277,7 @@ function publicRoomState(room) {
     code: room.code,
     hostId: room.hostId,
     status: room.status,
-    players: room.players.map(({ id, name, color, money, position, bankrupt, inDebt, inJail, connected }) => ({ id, name, color, money, position, bankrupt, inDebt, inJail, connected })),
+    players: room.players.map(({ id, name, color, money, position, bankrupt, inDebt, inJail, connected, kicked }) => ({ id, name, color, money, position, bankrupt, inDebt, inJail, connected, kicked })),
     tiles: room.tiles,
     currentPlayerIndex: room.currentPlayerIndex,
     diceRolled: room.diceRolled,
@@ -276,7 +289,11 @@ function publicRoomState(room) {
     lastDice: room.lastDice,
     trades: room.trades,
     vacationPot: room.vacationPot || 0,
-    jailFee: JAIL_FEE
+    jailFee: JAIL_FEE,
+    canRollAgain: Boolean(room.canRollAgain),
+    doubleRollCount: Number(room.doubleRollCount) || 0,
+    timerPhase: room.timerPhase || null,
+    turnDeadline: room.turnDeadline || null
   };
 }
 
@@ -404,6 +421,7 @@ io.on('connection', socket => {
     room.status = 'playing';
     room.actionText = `${room.players[0].name}, baci kockice.`;
     addLog(room, `Igra je počela. Broj igrača: ${room.players.length}.`);
+    scheduleRollTimer(room);
     touchRoom(room);
     emitRoom(room);
   });
@@ -412,41 +430,10 @@ io.on('connection', socket => {
     const room = getRoom(socket.data.roomCode);
     if (!room) return emitError(socket, 'Soba nije pronađena.');
     const playerIndex = findPlayerIndex(room, socket.data.playerId);
-    const validation = validateCurrentPlayerAction(room, playerIndex);
+    const validation = validateCurrentPlayerAction(room, playerIndex, { allowDebtBankruptcyOnly: false });
     if (!validation.ok) return emitError(socket, validation.reason);
-    if (room.diceRolled) return emitError(socket, 'Kockice su već bačene ovaj potez.');
-
-    const player = room.players[playerIndex];
-    if (player.inJail) {
-      return emitError(socket, 'U pritvoru si. Plati izlaz ili baci kockice za duple.');
-    }
-    if (player.money <= 0) {
-      player.inDebt = true;
-      room.actionText = `${player.name} ima $${player.money}. Razmeni nešto da odeš iznad $0 ili proglasi bankrot.`;
-      emitRoom(room);
-      return;
-    }
-
-    const startState = publicRoomState(room);
-    const d1 = randomNumber(1, 6);
-    const d2 = randomNumber(1, 6);
-    const total = d1 + d2;
-    const paths = { [playerIndex]: [] };
-
-    room.diceRolled = true;
-    room.lastDice = [d1, d2];
-    room.lastRollTotal = total;
-    room.landedTileIndex = null;
-    room.actionText = `${player.name} je bacio ${d1} + ${d2} = ${total}.`;
-    addLog(room, room.actionText);
-
-    movePlayer(room, player, total, paths);
-    handleTile(room, player, paths);
-    room.landedTileIndex = player.position;
-    touchRoom(room);
-
-    const finalState = publicRoomState(room);
-    io.to(room.code).emit('room:animation', { playerIndex, dice: [d1, d2], paths, startState, finalState });
+    if (room.diceRolled && !room.canRollAgain) return emitError(socket, 'Kockice su već bačene ovaj potez.');
+    performRollDice(room, playerIndex, false);
   });
 
   socket.on('game:payJail', () => {
@@ -455,20 +442,10 @@ io.on('connection', socket => {
     const playerIndex = findPlayerIndex(room, socket.data.playerId);
     const validation = validateCurrentPlayerAction(room, playerIndex);
     if (!validation.ok) return emitError(socket, validation.reason);
-    if (room.diceRolled) return emitError(socket, 'Već si bacio kockice ovaj potez.');
-
+    if (room.diceRolled) return emitError(socket, 'Već si iskoristio potez.');
     const player = room.players[playerIndex];
     if (!player.inJail) return emitError(socket, 'Nisi u pritvoru.');
-
-    player.money -= JAIL_FEE;
-    player.inJail = false;
-    room.diceRolled = true;
-    room.landedTileIndex = player.position;
-    room.actionText = `${player.name} je platio $${JAIL_FEE} i izašao iz pritvora. To mu je potez za ovaj krug.`;
-    addLog(room, room.actionText);
-    checkDebt(room, player);
-    touchRoom(room);
-    emitRoom(room);
+    resolveJailPayment(room, playerIndex, false);
   });
 
   socket.on('game:rollJail', () => {
@@ -477,41 +454,10 @@ io.on('connection', socket => {
     const playerIndex = findPlayerIndex(room, socket.data.playerId);
     const validation = validateCurrentPlayerAction(room, playerIndex);
     if (!validation.ok) return emitError(socket, validation.reason);
-    if (room.diceRolled) return emitError(socket, 'Već si bacio kockice ovaj potez.');
-
+    if (room.diceRolled) return emitError(socket, 'Već si iskoristio potez.');
     const player = room.players[playerIndex];
     if (!player.inJail) return emitError(socket, 'Nisi u pritvoru.');
-
-    const startState = publicRoomState(room);
-    const d1 = randomNumber(1, 6);
-    const d2 = randomNumber(1, 6);
-    const total = d1 + d2;
-    const paths = { [playerIndex]: [] };
-
-    room.diceRolled = true;
-    room.lastDice = [d1, d2];
-    room.lastRollTotal = total;
-    room.landedTileIndex = null;
-
-    if (d1 === d2) {
-      player.inJail = false;
-      room.actionText = `${player.name} je bacio duple ${d1}+${d2} i izašao iz pritvora. To mu je potez za ovaj krug.`;
-      addLog(room, room.actionText);
-    } else {
-      player.money -= JAIL_FEE;
-      player.inJail = false;
-      room.actionText = `${player.name} nije bacio duple (${d1}+${d2}) i mora da plati $${JAIL_FEE}. To mu je potez za ovaj krug.`;
-      addLog(room, room.actionText);
-      checkDebt(room, player);
-      if (player.money <= 0) {
-        room.actionText = `${player.name} je izašao iz pritvora, ali ima $${player.money}. Mora da trguje ili proglasi bankrot.`;
-      }
-    }
-
-    room.landedTileIndex = player.position;
-    touchRoom(room);
-    const finalState = publicRoomState(room);
-    io.to(room.code).emit('room:animation', { playerIndex, dice: [d1, d2], paths, startState, finalState });
+    performJailRoll(room, playerIndex, false);
   });
 
   socket.on('game:buy', () => {
@@ -531,7 +477,7 @@ io.on('connection', socket => {
 
     player.money -= tile.price;
     tile.owner = playerIndex;
-    room.actionText = `${player.name} je kupio ${tile.name} za $${tile.price}.`;
+    room.actionText = `${player.name} je kupio ${tile.name} za ${money(tile.price)}.`;
     addLog(room, room.actionText);
     checkDebt(room, player);
     touchRoom(room);
@@ -545,22 +491,7 @@ io.on('connection', socket => {
     const validation = validateCurrentPlayerAction(room, playerIndex);
     if (!validation.ok) return emitError(socket, validation.reason);
     if (!room.diceRolled) return emitError(socket, 'Prvo baci kockice.');
-
-    const player = room.players[playerIndex];
-    if (player.money <= 0) {
-      player.inDebt = true;
-      room.actionText = `${player.name} ne može da završi potez sa $${player.money}. Trguj ili proglasi bankrot.`;
-      emitRoom(room);
-      return;
-    }
-
-    room.diceRolled = false;
-    room.landedTileIndex = null;
-    moveToNextActivePlayer(room);
-    const next = room.players[room.currentPlayerIndex];
-    room.actionText = `${next.name}, baci kockice.`;
-    touchRoom(room);
-    emitRoom(room);
+    endTurnForRoom(room);
   });
 
   socket.on('trade:create', (payload = {}) => {
@@ -667,17 +598,29 @@ io.on('connection', socket => {
       player.money -= cost;
       tile.houses += 1;
       const buildingName = tile.houses === 5 ? 'hotel' : `kuću ${tile.houses}`;
-      addLog(room, `${player.name} je izgradio ${buildingName} na ${tile.name} za $${cost}.`);
+      addLog(room, `${player.name} je izgradio ${buildingName} na ${tile.name} za ${money(cost)}.`);
     } else {
       const refund = Math.floor((tile.houses === 5 ? tile.hotelCost : tile.houseCost) / 2);
       const removedName = tile.houses === 5 ? 'hotel' : 'kuću';
       tile.houses -= 1;
       player.money += refund;
-      addLog(room, `${player.name} je prodao ${removedName} sa ${tile.name} i dobio $${refund}.`);
+      addLog(room, `${player.name} je prodao ${removedName} sa ${tile.name} i dobio ${money(refund)}.`);
     }
 
     checkDebt(room, player);
     room.actionText = `${player.name} je promenio objekte na ${tile.name}.`;
+    touchRoom(room);
+    emitRoom(room);
+  });
+
+  socket.on('game:kick', (payload = {}) => {
+    const room = getRoom(socket.data.roomCode);
+    if (!room) return emitError(socket, 'Soba nije pronađena.');
+    if (room.hostId !== socket.data.playerId) return emitError(socket, 'Samo host može da izbaci igrača.');
+    const target = findPlayerIndex(room, String(payload.playerId || ''));
+    if (target < 0) return emitError(socket, 'Igrač nije pronađen.');
+    if (room.players[target].id === room.hostId) return emitError(socket, 'Host ne može da izbaci sam sebe.');
+    kickPlayer(room, target);
     touchRoom(room);
     emitRoom(room);
   });
@@ -700,7 +643,7 @@ io.on('connection', socket => {
     const room = getRoom(payload.roomCode || socket.data.roomCode);
     if (!room) return socket.emit('server:heartbeat', { ok: false });
     const player = findPlayer(room, payload.playerId || socket.data.playerId);
-    if (player) {
+    if (player && !player.bankrupt) {
       player.lastSeen = Date.now();
       player.connected = true;
       player.socketId = socket.id;
@@ -722,13 +665,197 @@ io.on('connection', socket => {
   });
 });
 
+
+function clearTurnTimer(room) {
+  if (!room) return;
+  if (room.turnTimerHandle) clearTimeout(room.turnTimerHandle);
+  room.turnTimerHandle = null;
+  room.timerPhase = null;
+  room.turnDeadline = null;
+}
+
+function scheduleTurnTimer(room, phase) {
+  clearTurnTimer(room);
+  if (!room || room.status !== 'playing' || room.gameOver) return;
+  const player = room.players[room.currentPlayerIndex];
+  if (!player || player.bankrupt || player.money <= 0) return;
+  room.timerPhase = phase;
+  room.turnDeadline = Date.now() + TURN_TIMER_MS;
+  const playerIndex = room.currentPlayerIndex;
+  const deadline = room.turnDeadline;
+  room.turnTimerHandle = setTimeout(() => handleTurnTimeout(room.code, playerIndex, phase, deadline), TURN_TIMER_MS + 120);
+}
+
+function scheduleRollTimer(room) {
+  scheduleTurnTimer(room, 'roll');
+}
+
+function scheduleEndTimer(room) {
+  scheduleTurnTimer(room, 'end');
+}
+
+function handleTurnTimeout(roomCode, playerIndex, phase, deadline) {
+  const room = getRoom(roomCode);
+  if (!room || room.status !== 'playing' || room.gameOver) return;
+  if (room.currentPlayerIndex !== playerIndex || room.turnDeadline !== deadline || room.timerPhase !== phase) return;
+  const player = room.players[playerIndex];
+  if (!player || player.bankrupt || player.money <= 0) return;
+
+  if ((phase === 'roll' || phase === 'extraRoll') && (!room.diceRolled || room.canRollAgain)) {
+    if (player.inJail) performJailRoll(room, playerIndex, true);
+    else performRollDice(room, playerIndex, true);
+    return;
+  }
+
+  if (phase === 'end' && room.diceRolled && !room.canRollAgain) {
+    addLog(room, `⏱ ${player.name} nije završio potez na vreme. Potez se automatski završava.`);
+    endTurnForRoom(room);
+  }
+}
+
+function performRollDice(room, playerIndex, automatic) {
+  const player = room.players[playerIndex];
+  if (!player || player.bankrupt) return;
+  if (player.inJail) {
+    room.actionText = 'U pritvoru si. Plati izlaz ili baci kockice za duple.';
+    emitRoom(room);
+    return;
+  }
+  if (player.money <= 0) {
+    player.inDebt = true;
+    room.actionText = `${player.name} ima ${money(player.money)}. Razmeni nešto da odeš iznad ${money(0)} ili proglasi bankrot.`;
+    emitRoom(room);
+    return;
+  }
+
+  clearTurnTimer(room);
+  const startState = publicRoomState(room);
+  const d1 = randomNumber(1, 6);
+  const d2 = randomNumber(1, 6);
+  const total = d1 + d2;
+  const paths = { [playerIndex]: [] };
+  const isDouble = d1 === d2;
+
+  room.diceRolled = true;
+  room.canRollAgain = false;
+  room.lastDice = [d1, d2];
+  room.lastRollTotal = total;
+  room.landedTileIndex = null;
+
+  if (isDouble) room.doubleRollCount = (Number(room.doubleRollCount) || 0) + 1;
+  else room.doubleRollCount = 0;
+
+  if (isDouble && room.doubleRollCount >= 3) {
+    player.inJail = true;
+    room.doubleRollCount = 0;
+    directMove(room, player, 10, paths, false);
+    room.actionText = `${automatic ? '⏱ ' : ''}${player.name} je bacio treće duple (${d1}+${d2}) i ide direktno u pritvor.`;
+    addLog(room, room.actionText);
+    room.landedTileIndex = player.position;
+    scheduleEndTimer(room);
+  } else {
+    room.actionText = `${automatic ? '⏱ ' : ''}${player.name} je bacio ${d1} + ${d2} = ${total}.`;
+    addLog(room, room.actionText);
+    movePlayer(room, player, total, paths);
+    handleTile(room, player, paths);
+    room.landedTileIndex = player.position;
+
+    if (isDouble && !player.bankrupt && !player.inDebt && player.money > 0 && !player.inJail && !room.gameOver) {
+      room.canRollAgain = true;
+      room.actionText += ` Duple! ${player.name} može da baci opet.`;
+      addLog(room, `🎲 ${player.name} ima duple i dobija još jedno bacanje.`);
+      scheduleTurnTimer(room, 'extraRoll');
+    } else {
+      scheduleEndTimer(room);
+    }
+  }
+
+  touchRoom(room);
+  const finalState = publicRoomState(room);
+  io.to(room.code).emit('room:animation', { playerIndex, dice: [d1, d2], paths, startState, finalState });
+}
+
+function resolveJailPayment(room, playerIndex, automatic) {
+  const player = room.players[playerIndex];
+  clearTurnTimer(room);
+  player.money -= JAIL_FEE;
+  player.inJail = false;
+  room.diceRolled = true;
+  room.canRollAgain = false;
+  room.doubleRollCount = 0;
+  room.landedTileIndex = player.position;
+  room.actionText = `${automatic ? '⏱ ' : ''}${player.name} je platio ${money(JAIL_FEE)} i izašao iz pritvora. To je ceo potez za ovaj krug.`;
+  addLog(room, room.actionText);
+  checkDebt(room, player);
+  if (player.money > 0) scheduleEndTimer(room);
+  touchRoom(room);
+  emitRoom(room);
+}
+
+function performJailRoll(room, playerIndex, automatic) {
+  const player = room.players[playerIndex];
+  clearTurnTimer(room);
+  const startState = publicRoomState(room);
+  const d1 = randomNumber(1, 6);
+  const d2 = randomNumber(1, 6);
+  const paths = { [playerIndex]: [] };
+  room.diceRolled = true;
+  room.canRollAgain = false;
+  room.doubleRollCount = 0;
+  room.lastDice = [d1, d2];
+  room.lastRollTotal = d1 + d2;
+  room.landedTileIndex = player.position;
+
+  if (d1 === d2) {
+    player.inJail = false;
+    room.actionText = `${automatic ? '⏱ ' : ''}${player.name} je bacio duple ${d1}+${d2} i izašao iz pritvora. To je ceo potez za ovaj krug.`;
+    addLog(room, room.actionText);
+  } else {
+    player.money -= JAIL_FEE;
+    player.inJail = false;
+    room.actionText = `${automatic ? '⏱ ' : ''}${player.name} nije bacio duple (${d1}+${d2}) i plaća ${money(JAIL_FEE)}. To je ceo potez za ovaj krug.`;
+    addLog(room, room.actionText);
+    checkDebt(room, player);
+    if (player.money <= 0) {
+      room.actionText = `${player.name} je izašao iz pritvora, ali ima ${money(player.money)}. Mora da trguje ili proglasi bankrot.`;
+    }
+  }
+
+  if (player.money > 0) scheduleEndTimer(room);
+  touchRoom(room);
+  const finalState = publicRoomState(room);
+  io.to(room.code).emit('room:animation', { playerIndex, dice: [d1, d2], paths, startState, finalState });
+}
+
+function endTurnForRoom(room) {
+  if (!room || room.status !== 'playing' || room.gameOver) return;
+  clearTurnTimer(room);
+  const player = room.players[room.currentPlayerIndex];
+  if (player && player.money <= 0) {
+    player.inDebt = true;
+    room.actionText = `${player.name} ne može da završi potez sa ${money(player.money)}. Trguj ili proglasi bankrot.`;
+    emitRoom(room);
+    return;
+  }
+  room.diceRolled = false;
+  room.canRollAgain = false;
+  room.doubleRollCount = 0;
+  room.landedTileIndex = null;
+  moveToNextActivePlayer(room);
+  const next = room.players[room.currentPlayerIndex];
+  room.actionText = `${next.name}, baci kockice.`;
+  scheduleRollTimer(room);
+  touchRoom(room);
+  emitRoom(room);
+}
+
 function validateCurrentPlayerAction(room, playerIndex) {
   if (!room || room.status !== 'playing' || room.gameOver) return { ok: false, reason: 'Igra nije aktivna.' };
   if (playerIndex < 0) return { ok: false, reason: 'Nisi u ovoj sobi.' };
   if (playerIndex !== room.currentPlayerIndex) return { ok: false, reason: 'Nije tvoj potez.' };
   const player = room.players[playerIndex];
   if (!player || player.bankrupt) return { ok: false, reason: 'Bankrotirao si.' };
-  if (player.money <= 0) return { ok: false, reason: 'Moraš da se vratiš iznad $0 trgovinom ili da proglasiš bankrot.' };
+  if (player.money <= 0) return { ok: false, reason: `Moraš da se vratiš iznad ${money(0)} trgovinom ili da proglasiš bankrot.` };
   return { ok: true };
 }
 
@@ -744,8 +871,10 @@ function movePlayer(room, player, steps, paths) {
     player.position = newPosition;
     paths[playerIndex].push(newPosition);
     if (direction > 0 && newPosition === 0) {
-      player.money += START_BONUS;
-      addLog(room, `${player.name} je prošao START i dobio $${START_BONUS}.`);
+      const landedOnStart = i === totalSteps - 1;
+      const bonus = landedOnStart ? LAND_START_BONUS : PASS_START_BONUS;
+      player.money += bonus;
+      addLog(room, `${player.name} je ${landedOnStart ? 'stao na' : 'prošao'} START i dobio ${money(bonus)}.`);
       checkDebt(room, player);
     }
   }
@@ -760,8 +889,8 @@ function directMove(room, player, targetIndex, paths, collectStartBonus) {
   room.landedTileIndex = targetIndex;
   paths[playerIndex].push(targetIndex);
   if (collectStartBonus) {
-    player.money += START_BONUS;
-    addLog(room, `${player.name} je dobio $${START_BONUS} na STARTU.`);
+    player.money += LAND_START_BONUS;
+    addLog(room, `${player.name} je dobio ${money(LAND_START_BONUS)} na STARTU.`);
     checkDebt(room, player);
   }
 }
@@ -780,7 +909,7 @@ function handleTile(room, player, paths) {
     if (pot > 0) {
       room.vacationPot = 0;
       player.money += pot;
-      room.actionText = `${player.name} je stao na Odmor i pokupio $${pot}.`;
+      room.actionText = `${player.name} je stao na Odmor i pokupio ${money(pot)}.`;
       addLog(room, room.actionText);
       checkDebt(room, player);
     } else {
@@ -792,7 +921,7 @@ function handleTile(room, player, paths) {
 
   if (tile.type === 'tax') {
     const taxAmount = getTaxAmount(tile, player);
-    room.actionText = `${player.name} je platio $${taxAmount} za ${tile.name}. Novac ide u Odmor.`;
+    room.actionText = `${player.name} je platio ${money(taxAmount)} za ${tile.name}. Novac ide u Odmor.`;
     payTax(room, player, taxAmount, tile.name);
     return;
   }
@@ -804,7 +933,7 @@ function handleTile(room, player, paths) {
 
   if (tile.type === 'goToJail') {
     player.inJail = true;
-    room.actionText = `${player.name} ide u pritvor. Sledeći potez mora da plati $${JAIL_FEE} ili baci duple.`;
+    room.actionText = `${player.name} ide u pritvor. Sledeći potez mora da plati ${money(JAIL_FEE)} ili baci duple.`;
     addLog(room, room.actionText);
     directMove(room, player, 10, paths, false);
     return;
@@ -819,7 +948,7 @@ function handleTile(room, player, paths) {
   if (isPurchasableTile(tile)) {
     if (tile.owner === null) {
       room.actionText = player.money >= tile.price
-        ? `${tile.name} je slobodno. ${player.name} može da kupi za $${tile.price}.`
+        ? `${tile.name} je slobodno. ${player.name} može da kupi za ${money(tile.price)}.`
         : `${tile.name} je slobodno, ali ${player.name} nema dovoljno novca.`;
       addLog(room, room.actionText);
       return;
@@ -840,7 +969,7 @@ function handleTile(room, player, paths) {
     }
 
     const rent = getTileRent(room, tile, room.lastRollTotal);
-    room.actionText = `${player.name} plaća $${rent} rente igraču ${owner.name} za ${tile.name}.`;
+    room.actionText = `${player.name} plaća ${money(rent)} rente igraču ${owner.name} za ${tile.name}.`;
     payPlayer(room, player, owner, rent, `renta za ${tile.name}`);
   }
 }
@@ -863,7 +992,7 @@ function isPurchasableTile(tile) {
 
 function payBank(room, player, amount, reason) {
   player.money -= amount;
-  addLog(room, `${player.name} je platio $${amount} banci: ${reason}.`);
+  addLog(room, `${player.name} je platio ${money(amount)} banci: ${reason}.`);
   checkDebt(room, player);
 }
 
@@ -871,7 +1000,7 @@ function payTax(room, player, amount, reason) {
   const safeAmount = Math.max(0, Math.floor(Number(amount) || 0));
   player.money -= safeAmount;
   room.vacationPot = (Number(room.vacationPot) || 0) + safeAmount;
-  addLog(room, `${player.name} je platio $${safeAmount} za ${reason}. Odmor fond sada ima $${room.vacationPot}.`);
+  addLog(room, `${player.name} je platio ${money(safeAmount)} za ${reason}. Odmor fond sada ima ${money(room.vacationPot)}.`);
   checkDebt(room, player);
 }
 
@@ -886,14 +1015,14 @@ function getTaxAmount(tile, player) {
 function payPlayer(room, fromPlayer, toPlayer, amount, reason) {
   fromPlayer.money -= amount;
   toPlayer.money += amount;
-  addLog(room, `${fromPlayer.name} je platio $${amount} igraču ${toPlayer.name}: ${reason}.`);
+  addLog(room, `${fromPlayer.name} je platio ${money(amount)} igraču ${toPlayer.name}: ${reason}.`);
   checkDebt(room, fromPlayer);
   checkDebt(room, toPlayer);
 }
 
 function addMoney(room, player, amount, reason) {
   player.money += amount;
-  addLog(room, `${player.name} je dobio $${amount}: ${reason}.`);
+  addLog(room, `${player.name} je dobio ${money(amount)}: ${reason}.`);
   checkDebt(room, player);
 }
 
@@ -902,18 +1031,78 @@ function checkDebt(room, player) {
   const wasInDebt = Boolean(player.inDebt);
   if (player.money <= 0) {
     player.inDebt = true;
-    if (!wasInDebt) addLog(room, `⚠️ ${player.name} ima $${player.money} i mora da trguje ili proglasi bankrot.`);
+    if (!wasInDebt) addLog(room, `⚠️ ${player.name} ima ${money(player.money)} i mora da trguje ili proglasi bankrot.`);
     if (room.players.indexOf(player) === room.currentPlayerIndex) {
-      room.actionText = `${player.name} ima $${player.money}. Trguj da odeš iznad $0 ili proglasi bankrot.`;
+      room.actionText = `${player.name} ima ${money(player.money)}. Trguj da odeš iznad ${money(0)} ili proglasi bankrot.`;
     }
     return;
   }
   if (wasInDebt) {
     player.inDebt = false;
-    addLog(room, `✅ ${player.name} se oporavio i sada ima $${player.money}.`);
+    addLog(room, `✅ ${player.name} se oporavio i sada ima ${money(player.money)}.`);
     if (room.players.indexOf(player) === room.currentPlayerIndex) {
-      room.actionText = `${player.name} je opet iznad $0 i može da nastavi.`;
+      room.actionText = `${player.name} je opet iznad ${money(0)} i može da nastavi.`;
+      if (room.diceRolled) scheduleEndTimer(room);
+      else scheduleRollTimer(room);
     }
+  }
+}
+
+function kickPlayer(room, playerIndex) {
+  const player = room.players[playerIndex];
+  if (!player || player.bankrupt) return;
+  if (room.status === 'lobby') {
+    addLog(room, `🚪 ${player.name} je izbačen iz sobe.`);
+    const kickedSocket = io.sockets.sockets.get(player.socketId);
+    if (kickedSocket) {
+      kickedSocket.emit('room:kicked', 'Izbačen si iz sobe od strane hosta.');
+      kickedSocket.leave(room.code);
+    }
+    room.players.splice(playerIndex, 1);
+    return;
+  }
+
+  player.bankrupt = true;
+  player.kicked = true;
+  player.connected = false;
+  player.inDebt = false;
+  player.inJail = false;
+  addLog(room, `🚪 ${player.name} je izbačen iz igre. Sva njegova polja se vraćaju banci.`);
+  room.tiles.forEach(tile => {
+    if (isPurchasableTile(tile) && tile.owner === playerIndex) {
+      tile.owner = null;
+      if (tile.type === 'property') tile.houses = 0;
+    }
+  });
+  room.trades.forEach(trade => {
+    if (trade.from === playerIndex || trade.to === playerIndex) trade.status = 'cancelled';
+  });
+  room.trades = room.trades.filter(trade => trade.status === 'pending');
+  const kickedSocket = io.sockets.sockets.get(player.socketId);
+  if (kickedSocket) {
+    kickedSocket.emit('room:kicked', 'Izbačen si iz igre od strane hosta.');
+    kickedSocket.leave(room.code);
+  }
+
+  const activePlayers = room.players.filter(item => !item.bankrupt);
+  if (activePlayers.length === 1) {
+    clearTurnTimer(room);
+    room.gameOver = true;
+    room.status = 'ended';
+    room.endedAt = Date.now();
+    room.actionText = `🏆 ${activePlayers[0].name} je pobedio!`;
+    addLog(room, room.actionText);
+    return;
+  }
+  if (playerIndex === room.currentPlayerIndex) {
+    room.diceRolled = false;
+    room.canRollAgain = false;
+    room.doubleRollCount = 0;
+    room.landedTileIndex = null;
+    moveToNextActivePlayer(room);
+    const next = room.players[room.currentPlayerIndex];
+    room.actionText = `${next.name}, baci kockice.`;
+    scheduleRollTimer(room);
   }
 }
 
@@ -936,6 +1125,7 @@ function declareBankruptcy(room, playerIndex) {
   room.trades = room.trades.filter(trade => trade.status === 'pending');
   const activePlayers = room.players.filter(item => !item.bankrupt);
   if (activePlayers.length === 1) {
+    clearTurnTimer(room);
     room.gameOver = true;
     room.status = 'ended';
     room.endedAt = Date.now();
@@ -944,11 +1134,15 @@ function declareBankruptcy(room, playerIndex) {
     return;
   }
   if (playerIndex === room.currentPlayerIndex) {
+    clearTurnTimer(room);
     room.diceRolled = false;
+    room.canRollAgain = false;
+    room.doubleRollCount = 0;
     room.landedTileIndex = null;
     moveToNextActivePlayer(room);
     const next = room.players[room.currentPlayerIndex];
     room.actionText = `${next.name}, baci kockice.`;
+    scheduleRollTimer(room);
   }
 }
 

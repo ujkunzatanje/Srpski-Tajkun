@@ -1799,3 +1799,110 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 }
+
+/* Version 11 refinements */
+.turn-timer {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 132px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: rgba(255, 240, 184, 0.12);
+  color: #fff0b8;
+  border: 1px solid rgba(255, 240, 184, 0.24);
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.turn-timer.danger {
+  background: rgba(239, 71, 111, 0.20);
+  color: #ffd1da;
+  border-color: rgba(239, 71, 111, 0.42);
+  animation: timerPulse 0.7s ease-in-out infinite alternate;
+}
+
+@keyframes timerPulse {
+  from { transform: scale(1); }
+  to { transform: scale(1.04); }
+}
+
+.avatar {
+  opacity: 0.76;
+  mix-blend-mode: normal;
+}
+
+.avatar-head,
+.avatar-body {
+  backdrop-filter: blur(1px);
+}
+
+.tile.property-tile {
+  background:
+    radial-gradient(circle at 50% 38%, rgba(255,255,255,0.10), transparent 46%),
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--group-color) 42%, #3a2860 58%),
+      color-mix(in srgb, var(--group-color) 25%, #160d21 75%)
+    );
+  border-color: color-mix(in srgb, var(--group-color) 38%, rgba(255,255,255,0.16));
+}
+
+.tile.property-tile .group-glow {
+  opacity: 0.08;
+}
+
+.tile-name {
+  font-size: clamp(8px, calc(var(--tile-size) * 0.145), 12px);
+  line-height: 1.02;
+  padding: 0 1px;
+}
+
+.tile.corner .tile-name {
+  font-size: clamp(11px, calc(var(--tile-size) * 0.17), 16px);
+}
+
+.tile-icon-slot {
+  opacity: 0.88;
+}
+
+.kick-button {
+  margin-left: 6px;
+  padding: 5px 8px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #ed6a50, #b84031);
+  color: white;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.kick-button.full {
+  grid-column: 1 / -1;
+  width: 100%;
+  margin: 4px 0 0;
+  padding: 9px 10px;
+  font-size: 12px;
+}
+
+.lobby-player-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+@media (max-width: 720px) {
+  .turn-timer {
+    min-width: 112px;
+    padding: 7px 10px;
+    font-size: 12px;
+  }
+
+  .tile-name {
+    font-size: clamp(7px, calc(var(--tile-size) * 0.13), 10px);
+  }
+
+  .avatar {
+    opacity: 0.72;
+  }
+}

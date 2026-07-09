@@ -32,6 +32,7 @@
 
       <div class="online-actions">
         <button id="createRoomBtn" class="big-button">Napravi sobu</button>
+        <p id="joinLinkNotice" class="small-note hidden">Ušao si preko linka sobe, zato je pravljenje nove sobe sakriveno.</p>
         <div class="join-row">
           <input id="roomCodeInput" placeholder="Kod sobe" maxlength="8" />
           <button id="joinRoomBtn" class="ghost-button">Uđi</button>
@@ -76,10 +77,12 @@
 
               <p id="actionText" class="action-text">Čekam stanje igre.</p>
 
+              <div id="turnTimer" class="turn-timer hidden">60s</div>
+
               <div class="control-row">
                 <button id="rollBtn" class="big-button">Baci kockice</button>
                 <button id="jailRollBtn" class="jail-button hidden">Bacaj za duple</button>
-                <button id="jailPayBtn" class="jail-button hidden">Plati $60</button>
+                <button id="jailPayBtn" class="jail-button hidden">Plati €60</button>
                 <button id="buyBtn" class="buy-button hidden">Kupi</button>
                 <button id="endTurnBtn" class="ghost-button">Završi potez</button>
               </div>
