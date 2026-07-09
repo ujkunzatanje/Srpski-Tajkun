@@ -13,7 +13,7 @@ let currentPlayerIndex = 0;
 let diceRolled = false;
 let landedTileIndex = null;
 let logs = [];
-let actionText = "Waiting for game state.";
+let actionText = "Čekam stanje igre.";
 let gameOver = false;
 let isAnimating = false;
 let movingPlayerIndex = null;
@@ -26,6 +26,8 @@ let hostPlayerId = null;
 let activeTradeDraft = null;
 let heartbeatTimer = null;
 let pendingState = null;
+let vacationPot = 0;
+let jailFee = 60;
 
 const setupScreen = document.getElementById("setupScreen");
 const gameScreen = document.getElementById("gameScreen");
@@ -43,6 +45,8 @@ const actionTextEl = document.getElementById("actionText");
 const die1 = document.getElementById("die1");
 const die2 = document.getElementById("die2");
 const rollBtn = document.getElementById("rollBtn");
+const jailRollBtn = document.getElementById("jailRollBtn");
+const jailPayBtn = document.getElementById("jailPayBtn");
 const buyBtn = document.getElementById("buyBtn");
 const endTurnBtn = document.getElementById("endTurnBtn");
 const createRoomBtn = document.getElementById("createRoomBtn");
@@ -70,6 +74,8 @@ copyRoomBtn.addEventListener("click", copyRoomLink);
 leaveRoomBtn.addEventListener("click", leaveRoom);
 createTradeBtn.addEventListener("click", openTradePlayerPicker);
 rollBtn.addEventListener("click", () => socket.emit("game:rollDice"));
+jailRollBtn.addEventListener("click", () => socket.emit("game:rollJail"));
+jailPayBtn.addEventListener("click", () => socket.emit("game:payJail"));
 buyBtn.addEventListener("click", () => socket.emit("game:buy"));
 endTurnBtn.addEventListener("click", () => socket.emit("game:endTurn"));
 window.addEventListener("resize", () => {
@@ -94,11 +100,11 @@ function connectSocket() {
   socket = io();
 
   socket.on("connect", () => {
-    setConnectionStatus("Connected", "ok");
+    setConnectionStatus("Povezano", "ok");
   });
 
   socket.on("disconnect", () => {
-    setConnectionStatus("Disconnected", "bad");
+    setConnectionStatus("Prekinuta veza", "bad");
   });
 
   socket.on("room:joined", payload => {
@@ -139,12 +145,12 @@ function connectSocket() {
   socket.on("room:error", message => showError(message));
 
   socket.on("server:heartbeat", payload => {
-    if (payload.ok) setConnectionStatus(`Connected · heartbeat ${new Date().toLocaleTimeString()}`, "ok");
+    if (payload.ok) setConnectionStatus(`Povezano · heartbeat ${new Date().toLocaleTimeString()}`, "ok");
   });
 }
 
 function createRoom() {
-  if (!socket || !socket.connected) return showError("Socket is not connected yet.");
+  if (!socket || !socket.connected) return showError("Veza još nije spremna.");
   socket.emit("room:create", {
     name: getPlayerName(),
     color: playerColorSelect.value,
@@ -153,9 +159,9 @@ function createRoom() {
 }
 
 function joinRoom() {
-  if (!socket || !socket.connected) return showError("Socket is not connected yet.");
+  if (!socket || !socket.connected) return showError("Veza još nije spremna.");
   const code = cleanRoomCode(roomCodeInput.value);
-  if (!code) return showError("Enter a room code.");
+  if (!code) return showError("Unesi kod sobe.");
   socket.emit("room:join", {
     roomCode: code,
     name: getPlayerName(),
@@ -166,7 +172,7 @@ function joinRoom() {
 
 function reconnectLastRoom() {
   const saved = getSavedSession();
-  if (!saved || !saved.roomCode || !saved.playerId) return showError("No saved room found.");
+  if (!saved || !saved.roomCode || !saved.playerId) return showError("Nema sačuvane sobe.");
   socket.emit("room:reconnect", { roomCode: saved.roomCode, playerId: saved.playerId });
 }
 
@@ -180,7 +186,7 @@ async function copyRoomLink() {
   const url = `${window.location.origin}${window.location.pathname}?room=${roomCode}`;
   try {
     await navigator.clipboard.writeText(url);
-    showError("Room link copied.", 1600);
+    showError("Link sobe je kopiran.", 1600);
   } catch {
     showError(url, 4500);
   }
@@ -200,7 +206,7 @@ function setUrlRoomCode(code) {
 }
 
 function getPlayerName() {
-  return (playerNameInput.value || "Player").trim().slice(0, 16) || "Player";
+  return (playerNameInput.value || "Igrač").trim().slice(0, 16) || "Igrač";
 }
 
 function cleanRoomCode(code) {
@@ -263,6 +269,8 @@ function applyState(state, options = {}) {
   lastRollTotal = state.lastRollTotal || 0;
   lastDice = state.lastDice || [1, 1];
   trades = state.trades || [];
+  vacationPot = Number(state.vacationPot) || 0;
+  jailFee = Number(state.jailFee) || 60;
   roomStatus = state.status || "lobby";
   hostPlayerId = state.hostId || null;
   isHost = state.hostId === myPlayerId;
@@ -399,7 +407,7 @@ function renderAll() {
 function renderLobby() {
   const inLobby = roomStatus === "lobby";
   lobbyPanel.classList.toggle("hidden", !inLobby);
-  roomInfoText.textContent = roomCode ? `Room ${roomCode} · ${roomStatus}${myPlayerIndex() >= 0 ? ` · You are ${players[myPlayerIndex()].name}` : ""}` : "Room";
+  roomInfoText.textContent = roomCode ? `Soba ${roomCode} · ${translateRoomStatus(roomStatus)}${myPlayerIndex() >= 0 ? ` · Ti si ${players[myPlayerIndex()].name}` : ""}` : "Soba";
   lobbyCode.textContent = roomCode || "-----";
   lobbyPlayers.innerHTML = players.map(player => `
     <div class="lobby-player-row">
@@ -408,7 +416,7 @@ function renderLobby() {
         ${safeText(player.name)}
       </div>
       <div>
-        ${player.id === myPlayerId ? `<span class="you-pill">You</span>` : ""}
+        ${player.id === myPlayerId ? `<span class="you-pill">Ti</span>` : ""}
         ${player.id === roomHostId() ? `<span class="host-pill">Host</span>` : ""}
         ${!player.connected ? `<span class="offline-pill">Offline</span>` : ""}
       </div>
@@ -420,6 +428,38 @@ function renderLobby() {
 
 function roomHostId() {
   return hostPlayerId || "";
+}
+
+function translateRoomStatus(status) {
+  if (status === "lobby") return "čekaonica";
+  if (status === "playing") return "igra u toku";
+  if (status === "ended") return "završeno";
+  return status || "soba";
+}
+
+function getTileDisplayName(tile) {
+  if (!tile) return "";
+  const shortNames = {
+    "Aerodrom Nikola Tesla": "A. Nikola Tesla",
+    "Železnička stanica": "Železnica",
+    "Autobuska stanica": "Autobus",
+    "Sremska Mitrovica": "S. Mitrovica",
+    "Pritvor / prolaz": "Pritvor",
+    "Porez na dobit": "Porez na dobit",
+    "Porez na luksuz": "Porez na luksuz"
+  };
+  return shortNames[tile.name] || tile.name;
+}
+
+function getTileBottomText(tile) {
+  if (!tile) return "";
+  if (isPurchasableTile(tile)) return money(tile.price);
+  if (tile.type === "tax") {
+    if (tile.taxMode === "percent") return `${tile.percent || 10}%`;
+    return money(tile.amount || 0);
+  }
+  if (tile.type === "rest") return vacationPot > 0 ? money(vacationPot) : "Odmor";
+  return tile.amount ? money(tile.amount) : tile.text || "";
 }
 
 function renderBoard() {
@@ -445,7 +485,7 @@ function renderBoard() {
     tileEl.className = classes;
 
     const ownerColor = isOwnedPurchasable ? players[tile.owner]?.color : "";
-    const priceText = isPurchasable ? money(tile.price) : (tile.amount ? money(tile.amount) : tile.text || "");
+    const priceText = getTileBottomText(tile);
     const icon = isPurchasable ? tile.icon : tile.emoji;
     const groupStyle = tile.type === "property" ? `style="--group-color:${tile.color}"` : "";
     const buildingMarker = tile.type === "property" && (tile.houses || 0) > 0
@@ -457,7 +497,7 @@ function renderBoard() {
 
     tileEl.innerHTML = `
       ${tile.type === "property" ? `<div class="group-glow" ${groupStyle}></div>` : ""}
-      <div class="tile-name">${safeText(tile.name)}</div>
+      <div class="tile-name">${safeText(getTileDisplayName(tile))}</div>
       <div class="tile-icon-slot">${icon || ""}</div>
       ${buildingMarker}
       ${bottomContent}
@@ -520,26 +560,26 @@ function renderPlayers() {
     const debtClass = !player.bankrupt && player.money <= 0 ? " in-debt" : "";
     const disconnectedClass = !player.connected ? " disconnected" : "";
     const mineClass = player.id === myPlayerId ? " mine" : "";
-    const status = player.bankrupt ? "Bankrupt" : player.money <= 0 ? "In debt" : !player.connected ? "Offline" : index === currentPlayerIndex && roomStatus === "playing" && !gameOver ? "Turn" : "Waiting";
+    const status = player.bankrupt ? "Bankrot" : player.money <= 0 ? "Dug" : player.inJail ? "Pritvor" : !player.connected ? "Offline" : index === currentPlayerIndex && roomStatus === "playing" && !gameOver ? "Potez" : "Čeka";
     const canDeclareSelfBankruptcy = player.id === myPlayerId && !player.bankrupt && player.money <= 0;
     const debtTools = canDeclareSelfBankruptcy
-      ? `<div class="debt-warning">Must get above ${money(0)} by trading, or declare bankruptcy.</div><button class="bankrupt-button" onclick="declareBankruptcy()">🏳 Declare bankruptcy</button>`
-      : (!player.bankrupt && player.money <= 0 ? `<div class="debt-warning">Waiting for this player to trade or declare bankruptcy.</div>` : "");
+      ? `<div class="debt-warning">Moraš iznad ${money(0)} trgovinom ili proglasi bankrot.</div><button class="bankrupt-button" onclick="declareBankruptcy()">🏳 Proglasi bankrot</button>`
+      : (!player.bankrupt && player.money <= 0 ? `<div class="debt-warning">Čeka se da ovaj igrač trguje ili proglasi bankrot.</div>` : "");
 
     return `
       <div class="player-card${currentClass}${bankruptClass}${debtClass}${disconnectedClass}${mineClass}">
         <div class="player-name-row">
           <div class="player-name">
             <span class="player-dot" style="--player-color:${player.color}"></span>
-            ${safeText(player.name)} ${player.id === myPlayerId ? `<span class="you-pill">You</span>` : ""}
+            ${safeText(player.name)} ${player.id === myPlayerId ? `<span class="you-pill">Ti</span>` : ""}
           </div>
           <span class="badge">${status}</span>
         </div>
         <div class="player-stats">
-          <div>Money: <strong>${money(player.money)}</strong></div>
-          <div>Tile: <strong>${safeText(tiles[player.position]?.name || "-")}</strong></div>
-          <div>Owned: <strong>${propertiesOwned}</strong></div>
-          <div>Full sets: <strong>${fullSetsOwned}</strong></div>
+          <div>Novac: <strong>${money(player.money)}</strong></div>
+          <div>Polje: <strong>${safeText(tiles[player.position]?.name || "-")}</strong></div>
+          <div>Vlasništvo: <strong>${propertiesOwned}</strong></div>
+          <div>Celi setovi: <strong>${fullSetsOwned}</strong></div>
           ${debtTools}
         </div>
       </div>
@@ -552,12 +592,13 @@ function renderLog() {
 }
 
 function renderControls() {
-  const myIndex = myPlayerIndex();
   const player = players[currentPlayerIndex];
-  const me = players[myIndex];
+  const me = players[myPlayerIndex()];
   const tile = landedTileIndex === null ? null : tiles[landedTileIndex];
+  const isMyTurn = Boolean(player && player.id === myPlayerId && roomStatus === "playing" && !gameOver);
   const blockedByDebt = Boolean(player && !player.bankrupt && player.money <= 0);
-  const isMyTurn = myIndex === currentPlayerIndex && roomStatus === "playing" && !gameOver;
+  const inJailTurn = Boolean(isMyTurn && player?.inJail && !diceRolled && !blockedByDebt);
+
   const canBuy = Boolean(
     isMyTurn &&
     diceRolled &&
@@ -566,7 +607,7 @@ function renderControls() {
     tile.owner === null &&
     player &&
     !player.bankrupt &&
-    !blockedByDebt &&
+    player.money > 0 &&
     player.money >= tile.price &&
     !gameOver &&
     !isAnimating
@@ -580,20 +621,27 @@ function renderControls() {
     tile.owner === null &&
     player &&
     !player.bankrupt &&
-    !blockedByDebt &&
     !gameOver &&
     !isAnimating
   );
 
-  currentPlayerText.textContent = gameOver ? "Game over" : roomStatus === "lobby" ? "Waiting in lobby" : blockedByDebt ? `${player.name} must fix debt` : `${player?.name || "Player"}'s turn`;
+  currentPlayerText.textContent = gameOver ? "Kraj igre" : roomStatus === "lobby" ? "Čekaonica" : `${player?.name || "Igrač"}${player?.inJail ? " · pritvor" : ""}`;
   actionTextEl.textContent = actionText;
-  rollBtn.disabled = !isMyTurn || diceRolled || gameOver || isAnimating || !player || player.bankrupt || blockedByDebt;
+
+  rollBtn.classList.toggle("hidden", inJailTurn);
+  jailRollBtn.classList.toggle("hidden", !inJailTurn);
+  jailPayBtn.classList.toggle("hidden", !inJailTurn);
+  jailPayBtn.textContent = `Plati ${money(jailFee)}`;
+
+  rollBtn.disabled = !isMyTurn || diceRolled || gameOver || isAnimating || !player || player.bankrupt || blockedByDebt || player.inJail;
+  jailRollBtn.disabled = !inJailTurn || isAnimating;
+  jailPayBtn.disabled = !inJailTurn || isAnimating;
   endTurnBtn.disabled = !isMyTurn || !diceRolled || gameOver || isAnimating || blockedByDebt;
 
   buyBtn.classList.toggle("hidden", !showBuyButton);
   buyBtn.disabled = !canBuy;
   if (tile && isPurchasableTile(tile)) {
-    buyBtn.textContent = canBuy ? `Buy ${tile.name} for ${money(tile.price)}` : "Not enough money";
+    buyBtn.textContent = canBuy ? `Kupi ${tile.name} za ${money(tile.price)}` : "Nema dovoljno novca";
   }
 
   createTradeBtn.disabled = roomStatus !== "playing" || gameOver || isAnimating || !me || me.bankrupt || players.filter(p => !p.bankrupt).length < 2;
@@ -603,12 +651,12 @@ function renderTrades() {
   if (!tradesPanel || !createTradeBtn) return;
   const pendingTrades = trades.filter(trade => trade.status === "pending");
   if (!players.length) {
-    tradesPanel.innerHTML = `<div class="trade-empty">Join a room to use trades.</div>`;
+    tradesPanel.innerHTML = `<div class="trade-empty">Uđi u sobu da koristiš razmene.</div>`;
     return;
   }
 
   if (!pendingTrades.length) {
-    tradesPanel.innerHTML = `<div class="trade-empty">No active trades. Any active player can create a trade offer here.</div>`;
+    tradesPanel.innerHTML = `<div class="trade-empty">Nema aktivnih razmena. Svaki aktivan igrač može da napravi ponudu.</div>`;
     return;
   }
 
@@ -621,15 +669,15 @@ function renderTrades() {
     return `
       <div class="trade-card">
         <div class="trade-card-title">
-          <span>${safeText(from?.name || "Player")} → ${safeText(to?.name || "Player")}</span>
-          <span class="trade-card-status">Pending</span>
+          <span>${safeText(from?.name || "Igrač")} → ${safeText(to?.name || "Igrač")}</span>
+          <span class="trade-card-status">Na čekanju</span>
         </div>
-        <div class="trade-summary-line"><strong>${safeText(from?.name || "Player")} offers:</strong> ${getTradeSideSummary(trade.fromMoney, trade.fromTiles)}</div>
-        <div class="trade-summary-line"><strong>${safeText(to?.name || "Player")} gives:</strong> ${getTradeSideSummary(trade.toMoney, trade.toTiles)}</div>
+        <div class="trade-summary-line"><strong>${safeText(from?.name || "Igrač")} nudi:</strong> ${getTradeSideSummary(trade.fromMoney, trade.fromTiles)}</div>
+        <div class="trade-summary-line"><strong>${safeText(to?.name || "Igrač")} daje:</strong> ${getTradeSideSummary(trade.toMoney, trade.toTiles)}</div>
         <div class="trade-card-actions">
-          <button class="trade-accept-button" onclick="acceptTrade(${trade.id})" ${canAccept ? "" : "disabled"}>Accept</button>
-          <button class="trade-decline-button" onclick="declineTrade(${trade.id})" ${canDecline ? "" : "disabled"}>Decline</button>
-          <button class="trade-cancel-button" onclick="cancelTrade(${trade.id})" ${canCancel ? "" : "disabled"}>Cancel</button>
+          <button class="trade-accept-button" onclick="acceptTrade(${trade.id})" ${canAccept ? "" : "disabled"}>Prihvati</button>
+          <button class="trade-decline-button" onclick="declineTrade(${trade.id})" ${canDecline ? "" : "disabled"}>Odbij</button>
+          <button class="trade-cancel-button" onclick="cancelTrade(${trade.id})" ${canCancel ? "" : "disabled"}>Otkaži</button>
         </div>
       </div>
     `;
@@ -660,8 +708,8 @@ function openTradePlayerPicker() {
 
   tradeModal.innerHTML = `
     <button class="modal-close-button" onclick="closeTradeModal()">×</button>
-    <h3>Create a trade</h3>
-    <p class="trade-help">${safeText(sender.name)} is sending the offer. Select one player to trade with.</p>
+    <h3>Napravi razmenu</h3>
+    <p class="trade-help">${safeText(sender.name)} šalje ponudu. Izaberi igrača za razmenu.</p>
     <div class="trade-target-list">
       ${targets.map(item => `
         <button class="trade-target-button" onclick="chooseTradeTarget(${item.index})">
@@ -691,15 +739,15 @@ function renderTradeBuilder() {
 
   tradeModal.innerHTML = `
     <button class="modal-close-button" onclick="closeTradeModal()">×</button>
-    <h3>Create a trade</h3>
+    <h3>Napravi razmenu</h3>
     <div class="trade-builder">
       ${makeTradeColumnHtml("from", from, activeTradeDraft.from, fromMoneyMax)}
       <div class="trade-swap-icon">↔</div>
       ${makeTradeColumnHtml("to", to, activeTradeDraft.to, toMoneyMax)}
     </div>
     <div class="trade-send-row">
-      <button class="trade-back-button" onclick="openTradePlayerPicker()">Back</button>
-      <button class="trade-send-button" onclick="sendTradeOffer()">Send trade</button>
+      <button class="trade-back-button" onclick="openTradePlayerPicker()">Nazad</button>
+      <button class="trade-send-button" onclick="sendTradeOffer()">Pošalji razmenu</button>
     </div>
   `;
   updateTradeMoneyLabels();
@@ -707,7 +755,7 @@ function renderTradeBuilder() {
 
 function makeTradeColumnHtml(side, player, playerIndex, moneyMax) {
   const ownedTiles = getOwnedTileIndexes(playerIndex);
-  const label = side === "from" ? "Offer from" : "Request from";
+  const label = side === "from" ? "Nudi" : "Traži od";
   const moneyInputId = side === "from" ? "tradeFromMoney" : "tradeToMoney";
   const moneyLabelId = side === "from" ? "tradeFromMoneyLabel" : "tradeToMoneyLabel";
   const checkboxName = side === "from" ? "tradeFromTile" : "tradeToTile";
@@ -719,12 +767,12 @@ function makeTradeColumnHtml(side, player, playerIndex, moneyMax) {
         ${label}: ${safeText(player.name)}
       </div>
       <div class="trade-money-control">
-        <label><span>Money offered</span><strong id="${moneyLabelId}">${money(0)}</strong></label>
+        <label><span>Novac</span><strong id="${moneyLabelId}">${money(0)}</strong></label>
         <input id="${moneyInputId}" type="range" min="0" max="${moneyMax}" step="10" value="0" oninput="updateTradeMoneyLabels()" />
-        <label><span>Has</span><strong>${money(player.money)}</strong></label>
+        <label><span>Ima</span><strong>${money(player.money)}</strong></label>
       </div>
       <div class="trade-property-list">
-        ${ownedTiles.length ? ownedTiles.map(tileIndex => makeTradePropertyRow(tileIndex, checkboxName)).join("") : `<div class="trade-no-property">No owned properties.</div>`}
+        ${ownedTiles.length ? ownedTiles.map(tileIndex => makeTradePropertyRow(tileIndex, checkboxName)).join("") : `<div class="trade-no-property">Nema kupljenih polja.</div>`}
       </div>
     </div>
   `;
@@ -733,7 +781,7 @@ function makeTradeColumnHtml(side, player, playerIndex, moneyMax) {
 function makeTradePropertyRow(tileIndex, checkboxName) {
   const tile = tiles[tileIndex];
   const propertyColor = tile.type === "property" ? tile.color : tile.type === "utility" ? "#00a28f" : "#607d8b";
-  const extra = tile.type === "property" && tile.houses ? ` · ${tile.houses === 5 ? "hotel" : `${tile.houses} house(s)`}` : "";
+  const extra = tile.type === "property" && tile.houses ? ` · ${tile.houses === 5 ? "hotel" : `${tile.houses} kuća`}` : "";
 
   return `
     <label class="trade-property-row">
@@ -763,7 +811,7 @@ function sendTradeOffer() {
   const toTiles = [...document.querySelectorAll('input[name="tradeToTile"]:checked')].map(input => Number(input.value));
 
   if (fromMoney <= 0 && toMoney <= 0 && fromTiles.length === 0 && toTiles.length === 0) {
-    showError("Choose money or at least one property for the trade.");
+    showError("Izaberi novac ili bar jedno polje za razmenu.");
     return;
   }
 
@@ -792,20 +840,20 @@ function cancelTrade(tradeId) {
 function canAcceptTrade(trade) {
   const from = players[trade.from];
   const to = players[trade.to];
-  if (!from || !to) return { ok: false, reason: "A player no longer exists." };
-  if (from.bankrupt || to.bankrupt) return { ok: false, reason: "A player in this trade is bankrupt." };
-  if (trade.fromMoney > 0 && from.money < trade.fromMoney) return { ok: false, reason: `${from.name} does not have enough money.` };
-  if (trade.toMoney > 0 && to.money < trade.toMoney) return { ok: false, reason: `${to.name} does not have enough money.` };
+  if (!from || !to) return { ok: false, reason: "Igrač više ne postoji." };
+  if (from.bankrupt || to.bankrupt) return { ok: false, reason: "Igrač u ovoj razmeni je bankrotirao." };
+  if (trade.fromMoney > 0 && from.money < trade.fromMoney) return { ok: false, reason: `${from.name} nema dovoljno novca.` };
+  if (trade.toMoney > 0 && to.money < trade.toMoney) return { ok: false, reason: `${to.name} nema dovoljno novca.` };
 
   for (const tileIndex of trade.fromTiles) {
     if (!isPurchasableTile(tiles[tileIndex]) || tiles[tileIndex].owner !== trade.from) {
-      return { ok: false, reason: `${tiles[tileIndex]?.name || "A property"} is no longer owned by ${from.name}.` };
+      return { ok: false, reason: `${tiles[tileIndex]?.name || "Polje"} više nije u vlasništvu igrača ${from.name}.` };
     }
   }
 
   for (const tileIndex of trade.toTiles) {
     if (!isPurchasableTile(tiles[tileIndex]) || tiles[tileIndex].owner !== trade.to) {
-      return { ok: false, reason: `${tiles[tileIndex]?.name || "A property"} is no longer owned by ${to.name}.` };
+      return { ok: false, reason: `${tiles[tileIndex]?.name || "Polje"} više nije u vlasništvu igrača ${to.name}.` };
     }
   }
 
@@ -816,9 +864,9 @@ function getTradeSideSummary(moneyAmount, tileIndexes) {
   const parts = [];
   if (moneyAmount > 0) parts.push(money(moneyAmount));
   if (tileIndexes.length) {
-    parts.push(tileIndexes.map(tileIndex => safeText(tiles[tileIndex]?.name || "Property")).join(" + "));
+    parts.push(tileIndexes.map(tileIndex => safeText(tiles[tileIndex]?.name || "Polje")).join(" + "));
   }
-  return parts.length ? parts.join(" + ") : "nothing";
+  return parts.length ? parts.join(" + ") : "ništa";
 }
 
 function getOwnedTileIndexes(playerIndex) {
@@ -838,33 +886,33 @@ function closeTradeModal() {
 function declareBankruptcy() {
   const me = players[myPlayerIndex()];
   if (!me || me.bankrupt || me.money > 0) return;
-  const ok = confirm(`${me.name} will leave the game and lose all owned tiles. Continue?`);
+  const ok = confirm(`${me.name} napušta igru i gubi sva kupljena polja. Nastaviti?`);
   if (!ok) return;
   socket.emit("game:bankrupt");
 }
 
 function changeBuilding(tileIndex, direction) {
-  if (!socket || !socket.connected) return showError("Socket is not connected yet.");
+  if (!socket || !socket.connected) return showError("Veza još nije spremna.");
   socket.emit("game:building", { tileIndex, direction });
 }
 
 function getBuildingLabel(houses) {
   const level = Number(houses) || 0;
-  if (level <= 0) return "No buildings";
+  if (level <= 0) return "Nema objekata";
   if (level === 5) return "Hotel";
-  return `${level} house${level === 1 ? "" : "s"}`;
+  return `${level} kuć${level === 1 ? "a" : "e"}`;
 }
 
 function canBuildClient(tile, ownerIndex) {
-  if (!tile || tile.type !== "property") return { ok: false, reason: "Only city properties can have buildings." };
+  if (!tile || tile.type !== "property") return { ok: false, reason: "Samo gradovi mogu da imaju objekte." };
   const player = players[ownerIndex];
-  if (!player || player.bankrupt) return { ok: false, reason: "Owner is bankrupt." };
-  if (tile.owner !== ownerIndex) return { ok: false, reason: "You do not own this property." };
-  if (!ownsFullGroup(ownerIndex, tile.group)) return { ok: false, reason: "Own the full color set first." };
-  if (player.money <= 0) return { ok: false, reason: "Fix debt before building." };
-  if ((tile.houses || 0) >= 5) return { ok: false, reason: "Hotel already built." };
+  if (!player || player.bankrupt) return { ok: false, reason: "Vlasnik je bankrotirao." };
+  if (tile.owner !== ownerIndex) return { ok: false, reason: "Ne poseduješ ovo polje." };
+  if (!ownsFullGroup(ownerIndex, tile.group)) return { ok: false, reason: "Prvo moraš da poseduješ ceo set." };
+  if (player.money <= 0) return { ok: false, reason: "Prvo reši dug." };
+  if ((tile.houses || 0) >= 5) return { ok: false, reason: "Hotel je već izgrađen." };
   const cost = (tile.houses || 0) === 4 ? tile.hotelCost : tile.houseCost;
-  if (player.money < cost) return { ok: false, reason: "Not enough money." };
+  if (player.money < cost) return { ok: false, reason: "Nema dovoljno novca." };
   return { ok: true, reason: "OK" };
 }
 
@@ -893,6 +941,14 @@ function renderTileInfoCard() {
   tileInfoCard.innerHTML = getTileInfoHtml(tile, selectedTileIndex);
   tileInfoCard.classList.remove("hidden");
 
+  if (window.innerWidth <= 720) {
+    tileInfoCard.style.left = "50%";
+    tileInfoCard.style.top = "50%";
+    tileInfoCard.style.transform = "translate(-50%, -50%)";
+    return;
+  }
+
+  tileInfoCard.style.transform = "none";
   const tileEl = document.getElementById(`tile-${selectedTileIndex}`);
   const boardRect = board.getBoundingClientRect();
   const tileRect = tileEl.getBoundingClientRect();
@@ -915,11 +971,11 @@ function getTileInfoHtml(tile, index) {
   const closeButton = `<button class="info-close" onclick="hideTileInfo()" aria-label="Close">×</button>`;
 
   if (tile.type === "property") {
-    const owner = tile.owner !== null ? players[tile.owner]?.name : "Bank";
+    const owner = tile.owner !== null ? players[tile.owner]?.name : "Banka";
     const groupCities = getGroupTiles(tile.group).map(groupTile => groupTile.name).join(" + ");
     const fullSetText = tile.owner !== null && ownsFullGroup(tile.owner, tile.group)
-      ? "Full set owned"
-      : `Full set: ${groupCities}`;
+      ? "Ceo set poseduje vlasnik"
+      : `Ceo set: ${groupCities}`;
 
     const myIndex = myPlayerIndex();
     const ownerIndex = tile.owner;
@@ -929,22 +985,22 @@ function getTileInfoHtml(tile, index) {
     const activeRent = tile.rentLevels[currentLevel] || tile.rentLevels[0];
     const nextCost = currentLevel === 4 ? tile.hotelCost : tile.houseCost;
     const sellRefund = Math.floor((currentLevel === 5 ? tile.hotelCost : tile.houseCost) / 2);
-    const buildCheck = isMine ? canBuildClient(tile, myIndex) : { ok: false, reason: "Only owner can build." };
+    const buildCheck = isMine ? canBuildClient(tile, myIndex) : { ok: false, reason: "Samo vlasnik može da gradi." };
     const canSellBuilding = isMine && currentLevel > 0;
     const buildingControls = isMine
       ? `<div class="building-controls">
           <div class="building-status">
-            <span>Buildings</span>
+            <span>Objekti</span>
             <strong>${safeText(getBuildingLabel(currentLevel))}</strong>
-            <small>Current rent: ${money(activeRent)}</small>
+            <small>Trenutna renta: ${money(activeRent)}</small>
           </div>
           ${hasFullSet
             ? `<div class="building-buttons">
-                <button onclick="changeBuilding(${index}, -1)" ${canSellBuilding ? "" : "disabled"}>▼ Sell ${currentLevel === 5 ? "hotel" : "house"}<small>+${money(sellRefund)}</small></button>
-                <button onclick="changeBuilding(${index}, 1)" ${buildCheck.ok ? "" : "disabled"}>▲ ${currentLevel === 4 ? "Build hotel" : "Build house"}<small>-${money(nextCost)}</small></button>
+                <button onclick="changeBuilding(${index}, -1)" ${canSellBuilding ? "" : "disabled"}>▼ Prodaj ${currentLevel === 5 ? "hotel" : "kuću"}<small>+${money(sellRefund)}</small></button>
+                <button onclick="changeBuilding(${index}, 1)" ${buildCheck.ok ? "" : "disabled"}>▲ ${currentLevel === 4 ? "Izgradi hotel" : "Izgradi kuću"}<small>-${money(nextCost)}</small></button>
               </div>
-              <p class="building-note">Each ▲ adds one house. After 4 houses, ▲ builds a hotel.</p>`
-            : `<p class="building-note blocked">Own the full ${safeText(tile.group)} set before building.</p>`}
+              <p class="building-note">Svaki ▲ dodaje jednu kuću. Posle 4 kuće, ▲ gradi hotel.</p>`
+            : `<p class="building-note blocked">Moraš da poseduješ ceo ${safeText(tile.group)} set pre gradnje.</p>`}
         </div>`
       : "";
 
@@ -953,23 +1009,23 @@ function getTileInfoHtml(tile, index) {
       <div class="info-card property-card" style="--card-accent:${tile.color}">
         <div class="info-accent"></div>
         <h3>${safeText(tile.name)}</h3>
-        <p class="info-subline">${safeText(tile.group)} group · owner: ${safeText(owner)}</p>
+        <p class="info-subline">${safeText(tile.group)} set · vlasnik: ${safeText(owner)}</p>
         <p class="info-set-line">${safeText(fullSetText)}</p>
 
         <div class="info-table">
-          <div class="info-row info-head"><span>when</span><span>get</span></div>
-          <div class="info-row ${currentLevel === 0 ? "active-rent-row" : ""}"><span>with rent</span><strong>${money(tile.rentLevels[0])}</strong></div>
-          <div class="info-row ${currentLevel === 1 ? "active-rent-row" : ""}"><span>with one house</span><strong>${money(tile.rentLevels[1])}</strong></div>
-          <div class="info-row ${currentLevel === 2 ? "active-rent-row" : ""}"><span>with two houses</span><strong>${money(tile.rentLevels[2])}</strong></div>
-          <div class="info-row ${currentLevel === 3 ? "active-rent-row" : ""}"><span>with three houses</span><strong>${money(tile.rentLevels[3])}</strong></div>
-          <div class="info-row ${currentLevel === 4 ? "active-rent-row" : ""}"><span>with four houses</span><strong>${money(tile.rentLevels[4])}</strong></div>
-          <div class="info-row ${currentLevel === 5 ? "active-rent-row" : ""}"><span>with a hotel</span><strong>${money(tile.rentLevels[5])}</strong></div>
+          <div class="info-row info-head"><span>kada</span><span>dobijaš</span></div>
+          <div class="info-row ${currentLevel === 0 ? "active-rent-row" : ""}"><span>osnovna renta</span><strong>${money(tile.rentLevels[0])}</strong></div>
+          <div class="info-row ${currentLevel === 1 ? "active-rent-row" : ""}"><span>sa jednom kućom</span><strong>${money(tile.rentLevels[1])}</strong></div>
+          <div class="info-row ${currentLevel === 2 ? "active-rent-row" : ""}"><span>sa dve kuće</span><strong>${money(tile.rentLevels[2])}</strong></div>
+          <div class="info-row ${currentLevel === 3 ? "active-rent-row" : ""}"><span>sa tri kuće</span><strong>${money(tile.rentLevels[3])}</strong></div>
+          <div class="info-row ${currentLevel === 4 ? "active-rent-row" : ""}"><span>sa četiri kuće</span><strong>${money(tile.rentLevels[4])}</strong></div>
+          <div class="info-row ${currentLevel === 5 ? "active-rent-row" : ""}"><span>sa hotelom</span><strong>${money(tile.rentLevels[5])}</strong></div>
         </div>
 
         <div class="info-divider"></div>
         <div class="info-footer three-cols">
-          <div><span>Price</span><strong>${money(tile.price)}</strong></div>
-          <div><span>🏠 House</span><strong>${money(tile.houseCost)}</strong></div>
+          <div><span>Cena</span><strong>${money(tile.price)}</strong></div>
+          <div><span>🏠 Kuća</span><strong>${money(tile.houseCost)}</strong></div>
           <div><span>🏨 Hotel</span><strong>${money(tile.hotelCost)}</strong></div>
         </div>
         ${buildingControls}
@@ -978,52 +1034,54 @@ function getTileInfoHtml(tile, index) {
   }
 
   if (tile.type === "transport") {
-    const owner = tile.owner !== null ? players[tile.owner]?.name : "Bank";
+    const owner = tile.owner !== null ? players[tile.owner]?.name : "Banka";
     return `
       ${closeButton}
       <div class="info-card transport-card">
         <div class="info-big-icon">${tile.icon}</div>
         <h3>${safeText(tile.name)}</h3>
-        <p class="info-subline">Transport · owner: ${safeText(owner)}</p>
+        <p class="info-subline">Prevoz · vlasnik: ${safeText(owner)}</p>
         <div class="info-table">
-          <div class="info-row info-head"><span>when</span><span>get</span></div>
-          <div class="info-row"><span>one transport is owned</span><strong>${money(tile.rentLevels[0])}</strong></div>
-          <div class="info-row"><span>2 transports are owned</span><strong>${money(tile.rentLevels[1])}</strong></div>
-          <div class="info-row"><span>3 transports are owned</span><strong>${money(tile.rentLevels[2])}</strong></div>
-          <div class="info-row"><span>4 transports are owned</span><strong>${money(tile.rentLevels[3])}</strong></div>
+          <div class="info-row info-head"><span>kada</span><span>dobijaš</span></div>
+          <div class="info-row"><span>poseduje 1 prevoz</span><strong>${money(tile.rentLevels[0])}</strong></div>
+          <div class="info-row"><span>poseduje 2 prevoza</span><strong>${money(tile.rentLevels[1])}</strong></div>
+          <div class="info-row"><span>poseduje 3 prevoza</span><strong>${money(tile.rentLevels[2])}</strong></div>
+          <div class="info-row"><span>poseduje 4 prevoza</span><strong>${money(tile.rentLevels[3])}</strong></div>
         </div>
         <div class="info-divider"></div>
-        <div class="info-footer one-col"><div><span>Price</span><strong>${money(tile.price)}</strong></div></div>
+        <div class="info-footer one-col"><div><span>Cena</span><strong>${money(tile.price)}</strong></div></div>
       </div>
     `;
   }
 
   if (tile.type === "utility") {
-    const owner = tile.owner !== null ? players[tile.owner]?.name : "Bank";
+    const owner = tile.owner !== null ? players[tile.owner]?.name : "Banka";
     return `
       ${closeButton}
       <div class="info-card utility-card">
         <div class="info-big-icon">${tile.icon}</div>
         <h3>${safeText(tile.name)}</h3>
-        <p class="info-subline">Utility · owner: ${safeText(owner)}</p>
+        <p class="info-subline">Komunalije · vlasnik: ${safeText(owner)}</p>
         <div class="info-table utility-text">
-          <p>If one utility is owned, rent is <strong>4 × dice roll</strong>.</p>
-          <p>If both EPS and Vodovod are owned, rent is <strong>10 × dice roll</strong>.</p>
-          <p>Last dice roll: <strong>${lastRollTotal || "-"}</strong></p>
+          <p>Ako poseduješ jedno komunalno polje, renta je <strong>4 × bacanje</strong>.</p>
+          <p>Ako poseduješ EPS i Vodovod, renta je <strong>10 × bacanje</strong>.</p>
+          <p>Poslednje bacanje: <strong>${lastRollTotal || "-"}</strong></p>
         </div>
         <div class="info-divider"></div>
-        <div class="info-footer one-col"><div><span>Price</span><strong>${money(tile.price)}</strong></div></div>
+        <div class="info-footer one-col"><div><span>Cena</span><strong>${money(tile.price)}</strong></div></div>
       </div>
     `;
   }
 
-  if (tile.type === "tax") return makeSimpleInfoCard(tile, "Tax", `${safeText(tile.name)} costs ${money(tile.amount)} when you land here.`);
-  if (tile.type === "event" || tile.type === "treasure") return makeSimpleInfoCard(tile, tile.type === "event" ? "Karta" : "Blago", "Draw one card and apply its effect immediately.");
-  if (tile.type === "jail") return makeSimpleInfoCard(tile, "Pritvor", "If you land here normally, you are only passing by.");
-  if (tile.type === "goToJail") return makeSimpleInfoCard(tile, "Pritvor", "Landing here sends the player directly to Pritvor.");
-  if (tile.type === "start") return makeSimpleInfoCard(tile, "START", `Pass or land on START and collect ${money(START_BONUS)}.`);
+  if (tile.type === "tax") return makeSimpleInfoCard(tile, "Porez", tile.taxMode === "percent" ? `${safeText(tile.name)} uzima ${tile.percent || 10}% tvog novca i šalje ga u Odmor.` : `${safeText(tile.name)} košta ${money(tile.amount || 0)} i ide u Odmor.`);
+  if (tile.type === "event" || tile.type === "treasure") return makeSimpleInfoCard(tile, tile.type === "event" ? "Karta" : "Blago", "Izvuci kartu i odmah primeni efekat.");
+  if (tile.type === "jail") return makeSimpleInfoCard(tile, "Pritvor", `Ako staneš ovde normalno, samo si u prolazu. Ako si poslat u pritvor, sledeći potez plaćaš ${money(jailFee)} ili bacaš za duple.`);
+  if (tile.type === "goToJail") return makeSimpleInfoCard(tile, "Pritvor", `Ovo polje šalje igrača direktno u pritvor. Izlaz je ${money(jailFee)} ili duple kockice.`);
+  if (tile.type === "start") return makeSimpleInfoCard(tile, "START", `Prođi ili stani na START i dobijaš ${money(START_BONUS)}.`);
 
-  return makeSimpleInfoCard(tile, tile.name, tile.text || "Nothing happens here.");
+  if (tile.type === "rest") return makeSimpleInfoCard(tile, "Odmor", vacationPot > 0 ? `U fondu je ${money(vacationPot)}. Ko stane ovde, dobija ceo fond.` : "Fond je prazan.");
+
+  return makeSimpleInfoCard(tile, tile.name, tile.text || "Ovde se ništa ne dešava.");
 }
 
 function makeSimpleInfoCard(tile, title, text) {
