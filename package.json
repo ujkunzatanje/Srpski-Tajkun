@@ -1,0 +1,17 @@
+{
+  "name": "serbia-property-board-game-online",
+  "version": "1.0.0",
+  "description": "Simple online Serbian property board game with Socket.IO rooms.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "socket.io": "^4.7.5"
+  }
+}
