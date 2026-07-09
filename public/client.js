@@ -28,6 +28,16 @@ let heartbeatTimer = null;
 let pendingState = null;
 let vacationPot = 0;
 let jailFee = 60;
+let unavailableColors = [];
+let selectedPlayerColor = "#2f6bff";
+let peekTimer = null;
+
+const setupColorChoices = [
+  { name: "Plava", value: "#2f6bff" },
+  { name: "Zelena", value: "#22c55e" },
+  { name: "Narandžasta", value: "#f59e0b" },
+  { name: "Roze", value: "#ef476f" }
+];
 
 const setupScreen = document.getElementById("setupScreen");
 const gameScreen = document.getElementById("gameScreen");
@@ -53,7 +63,8 @@ const createRoomBtn = document.getElementById("createRoomBtn");
 const joinRoomBtn = document.getElementById("joinRoomBtn");
 const reconnectBtn = document.getElementById("reconnectBtn");
 const playerNameInput = document.getElementById("playerName");
-const playerColorSelect = document.getElementById("playerColor");
+const playerColorInput = document.getElementById("playerColor");
+const playerColorOptions = document.getElementById("playerColorOptions");
 const roomCodeInput = document.getElementById("roomCodeInput");
 const connectionStatus = document.getElementById("connectionStatus");
 const lastRoomBox = document.getElementById("lastRoomBox");
@@ -72,6 +83,7 @@ reconnectBtn.addEventListener("click", reconnectLastRoom);
 hostStartBtn.addEventListener("click", () => socket.emit("game:start"));
 copyRoomBtn.addEventListener("click", copyRoomLink);
 leaveRoomBtn.addEventListener("click", leaveRoom);
+roomCodeInput.addEventListener("input", scheduleRoomPeek);
 createTradeBtn.addEventListener("click", openTradePlayerPicker);
 rollBtn.addEventListener("click", () => socket.emit("game:rollDice"));
 jailRollBtn.addEventListener("click", () => socket.emit("game:rollJail"));
@@ -91,6 +103,7 @@ document.addEventListener("keydown", event => {
 
 setDieValue(die1, 1);
 setDieValue(die2, 1);
+renderColorOptions();
 createBoardTiles();
 connectSocket();
 showLastRoomOption();
@@ -101,6 +114,7 @@ function connectSocket() {
 
   socket.on("connect", () => {
     setConnectionStatus("Povezano", "ok");
+    requestRoomPeek();
   });
 
   socket.on("disconnect", () => {
@@ -144,6 +158,13 @@ function connectSocket() {
 
   socket.on("room:error", message => showError(message));
 
+  socket.on("room:peekResult", payload => {
+    const currentCode = cleanRoomCode(roomCodeInput.value);
+    if (payload.roomCode && currentCode && payload.roomCode !== currentCode) return;
+    unavailableColors = Array.isArray(payload.takenColors) ? payload.takenColors : [];
+    renderColorOptions();
+  });
+
   socket.on("server:heartbeat", payload => {
     if (payload.ok) setConnectionStatus(`Povezano · heartbeat ${new Date().toLocaleTimeString()}`, "ok");
   });
@@ -153,7 +174,7 @@ function createRoom() {
   if (!socket || !socket.connected) return showError("Veza još nije spremna.");
   socket.emit("room:create", {
     name: getPlayerName(),
-    color: playerColorSelect.value,
+    color: getSelectedPlayerColor(),
     playerId: getSavedPlayerIdForRoom(null)
   });
 }
@@ -165,7 +186,7 @@ function joinRoom() {
   socket.emit("room:join", {
     roomCode: code,
     name: getPlayerName(),
-    color: playerColorSelect.value,
+    color: getSelectedPlayerColor(),
     playerId: getSavedPlayerIdForRoom(code)
   });
 }
@@ -195,7 +216,10 @@ async function copyRoomLink() {
 function readRoomFromUrl() {
   const params = new URLSearchParams(window.location.search);
   const code = cleanRoomCode(params.get("room"));
-  if (code) roomCodeInput.value = code;
+  if (code) {
+    roomCodeInput.value = code;
+    setTimeout(requestRoomPeek, 350);
+  }
 }
 
 function setUrlRoomCode(code) {
@@ -206,11 +230,66 @@ function setUrlRoomCode(code) {
 }
 
 function getPlayerName() {
-  return (playerNameInput.value || "Igrač").trim().slice(0, 16) || "Igrač";
+  return (playerNameInput.value || "").trim().slice(0, 16) || "Igrač";
 }
 
 function cleanRoomCode(code) {
   return String(code || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8);
+}
+
+function getSelectedPlayerColor() {
+  return playerColorInput?.value || selectedPlayerColor || setupColorChoices[0].value;
+}
+
+function selectPlayerColor(color) {
+  if (unavailableColors.includes(color)) return;
+  selectedPlayerColor = color;
+  if (playerColorInput) playerColorInput.value = color;
+  renderColorOptions();
+}
+
+function renderColorOptions() {
+  if (!playerColorOptions) return;
+  if (playerColorInput && !playerColorInput.value) playerColorInput.value = selectedPlayerColor;
+  selectedPlayerColor = getSelectedPlayerColor();
+
+  if (unavailableColors.includes(selectedPlayerColor)) {
+    const firstFree = setupColorChoices.find(choice => !unavailableColors.includes(choice.value));
+    if (firstFree) selectedPlayerColor = firstFree.value;
+    if (playerColorInput) playerColorInput.value = selectedPlayerColor;
+  }
+
+  playerColorOptions.innerHTML = setupColorChoices.map(choice => {
+    const taken = unavailableColors.includes(choice.value);
+    const active = selectedPlayerColor === choice.value;
+    return `
+      <button type="button" class="color-choice${active ? " selected" : ""}${taken ? " taken" : ""}"
+        style="--choice-color:${choice.value}"
+        onclick="selectPlayerColor('${choice.value}')"
+        ${taken ? "disabled" : ""}
+        title="${taken ? `${choice.name} je zauzeta` : choice.name}">
+        <span class="color-choice-swatch"></span>
+        <span>${choice.name}</span>
+        ${taken ? `<small>Zauzeta</small>` : ""}
+      </button>
+    `;
+  }).join("");
+}
+
+function scheduleRoomPeek() {
+  clearTimeout(peekTimer);
+  peekTimer = setTimeout(requestRoomPeek, 250);
+}
+
+function requestRoomPeek() {
+  if (!socket || !socket.connected) return;
+  const code = cleanRoomCode(roomCodeInput.value);
+  if (!code) {
+    unavailableColors = [];
+    renderColorOptions();
+    return;
+  }
+  socket.emit("room:peek", { roomCode: code });
 }
 
 function saveSession() {
@@ -288,7 +367,7 @@ function createBoardTiles() {
     const tileEl = document.createElement("div");
     tileEl.id = `tile-${i}`;
     tileEl.className = "tile";
-    tileEl.title = "Click for tile info";
+    tileEl.title = "Klikni za informacije";
 
     const position = getBoardPosition(i);
     tileEl.style.gridColumn = position.column;
@@ -445,8 +524,8 @@ function getTileDisplayName(tile) {
     "Autobuska stanica": "Autobus",
     "Sremska Mitrovica": "S. Mitrovica",
     "Pritvor / prolaz": "Pritvor",
-    "Porez na dobit": "Porez na dobit",
-    "Porez na luksuz": "Porez na luksuz"
+    "Porez na dobit": "Porez dobit",
+    "Porez na luksuz": "Porez luksuz"
   };
   return shortNames[tile.name] || tile.name;
 }
@@ -473,6 +552,7 @@ function renderBoard() {
     const isOwnedPurchasable = isPurchasable && tile.owner !== null;
 
     let classes = "tile";
+    if (tile.type === "property") classes += " property-tile";
     if (isOwnedPurchasable) classes += " owned";
     if (selectedTileIndex === index) classes += " selected";
     if ([0, 10, 20, 30].includes(index)) classes += " corner";
@@ -483,13 +563,15 @@ function renderBoard() {
     if (tile.type === "utility") classes += " utility";
     if (tile.type === "transport") classes += " transport";
     tileEl.className = classes;
+    if (tile.type === "property") tileEl.style.setProperty("--group-color", tile.color || "#7c4dff");
+    else tileEl.style.removeProperty("--group-color");
 
     const ownerColor = isOwnedPurchasable ? players[tile.owner]?.color : "";
     const priceText = getTileBottomText(tile);
     const icon = isPurchasable ? tile.icon : tile.emoji;
     const groupStyle = tile.type === "property" ? `style="--group-color:${tile.color}"` : "";
     const buildingMarker = tile.type === "property" && (tile.houses || 0) > 0
-      ? `<div class="building-marker">${tile.houses === 5 ? "🏨" : `🏠${tile.houses}`}</div>`
+      ? `<div class="building-marker ${tile.houses === 5 ? "hotel-marker" : "house-marker"}">${getBuildingIconHtml(tile.houses)}</div>`
       : "";
     const bottomContent = isOwnedPurchasable
       ? `<div class="owned-strip" style="--owner-color:${ownerColor}"><span>${safeText(ownerName)}</span></div>`
@@ -503,6 +585,12 @@ function renderBoard() {
       ${bottomContent}
     `;
   });
+}
+
+function getBuildingIconHtml(houses) {
+  const level = Math.min(5, Math.max(0, Number(houses) || 0));
+  if (level === 5) return `<span class="hotel-icon">🏨</span>`;
+  return `<span class="house-stack">${Array.from({ length: level }).map(() => `<span>🏠</span>`).join("")}</span>`;
 }
 
 function renderAvatars() {
@@ -561,10 +649,13 @@ function renderPlayers() {
     const disconnectedClass = !player.connected ? " disconnected" : "";
     const mineClass = player.id === myPlayerId ? " mine" : "";
     const status = player.bankrupt ? "Bankrot" : player.money <= 0 ? "Dug" : player.inJail ? "Pritvor" : !player.connected ? "Offline" : index === currentPlayerIndex && roomStatus === "playing" && !gameOver ? "Potez" : "Čeka";
-    const canDeclareSelfBankruptcy = player.id === myPlayerId && !player.bankrupt && player.money <= 0;
+    const canDeclareSelfBankruptcy = player.id === myPlayerId && !player.bankrupt && roomStatus === "playing";
+    const debtMessage = !player.bankrupt && player.money <= 0
+      ? (player.id === myPlayerId ? `<div class="debt-warning">Moraš iznad ${money(0)} trgovinom ili proglasi bankrot.</div>` : `<div class="debt-warning">Čeka se da ovaj igrač trguje ili proglasi bankrot.</div>`)
+      : "";
     const debtTools = canDeclareSelfBankruptcy
-      ? `<div class="debt-warning">Moraš iznad ${money(0)} trgovinom ili proglasi bankrot.</div><button class="bankrupt-button" onclick="declareBankruptcy()">🏳 Proglasi bankrot</button>`
-      : (!player.bankrupt && player.money <= 0 ? `<div class="debt-warning">Čeka se da ovaj igrač trguje ili proglasi bankrot.</div>` : "");
+      ? `${debtMessage}<button class="bankrupt-button" onclick="declareBankruptcy()">🏳 Proglasi bankrot</button>`
+      : debtMessage;
 
     return `
       <div class="player-card${currentClass}${bankruptClass}${debtClass}${disconnectedClass}${mineClass}">
@@ -663,25 +754,83 @@ function renderTrades() {
   tradesPanel.innerHTML = pendingTrades.map(trade => {
     const from = players[trade.from];
     const to = players[trade.to];
-    const canAccept = to?.id === myPlayerId && canAcceptTrade(trade).ok;
-    const canDecline = to?.id === myPlayerId;
-    const canCancel = from?.id === myPlayerId;
+    const mine = from?.id === myPlayerId || to?.id === myPlayerId;
+    const label = `${safeText(from?.name || "Igrač")} je poslao ponudu igraču ${safeText(to?.name || "Igrač")}`;
     return `
-      <div class="trade-card">
-        <div class="trade-card-title">
-          <span>${safeText(from?.name || "Igrač")} → ${safeText(to?.name || "Igrač")}</span>
-          <span class="trade-card-status">Na čekanju</span>
-        </div>
-        <div class="trade-summary-line"><strong>${safeText(from?.name || "Igrač")} nudi:</strong> ${getTradeSideSummary(trade.fromMoney, trade.fromTiles)}</div>
-        <div class="trade-summary-line"><strong>${safeText(to?.name || "Igrač")} daje:</strong> ${getTradeSideSummary(trade.toMoney, trade.toTiles)}</div>
-        <div class="trade-card-actions">
-          <button class="trade-accept-button" onclick="acceptTrade(${trade.id})" ${canAccept ? "" : "disabled"}>Prihvati</button>
-          <button class="trade-decline-button" onclick="declineTrade(${trade.id})" ${canDecline ? "" : "disabled"}>Odbij</button>
-          <button class="trade-cancel-button" onclick="cancelTrade(${trade.id})" ${canCancel ? "" : "disabled"}>Otkaži</button>
-        </div>
-      </div>
+      <button class="trade-list-item${mine ? " mine" : ""}" onclick="openTradeOffer(${trade.id})">
+        <span class="trade-list-main">${label}</span>
+        <span class="trade-list-sub">Klikni za detalje</span>
+      </button>
     `;
   }).join("");
+}
+
+function openTradeOffer(tradeId) {
+  const trade = trades.find(item => item.id === Number(tradeId) && item.status === "pending");
+  if (!trade) return showError("Razmena nije pronađena.");
+  const from = players[trade.from];
+  const to = players[trade.to];
+  const me = myPlayerIndex();
+  const canAccept = to?.id === myPlayerId && canAcceptTrade(trade).ok;
+  const canDecline = to?.id === myPlayerId;
+  const canCancel = from?.id === myPlayerId;
+  const canNegotiate = me === trade.from || me === trade.to;
+
+  tradeModal.innerHTML = `
+    <button class="modal-close-button" onclick="closeTradeModal()">×</button>
+    <h3>Ponuda za razmenu</h3>
+    <p class="trade-help">${safeText(from?.name || "Igrač")} je poslao ponudu igraču ${safeText(to?.name || "Igrač")}.</p>
+    <div class="trade-offer-detail">
+      <div class="trade-offer-side">
+        <h4>${safeText(from?.name || "Igrač")} nudi</h4>
+        ${makeTradeDetailSide(trade.fromMoney, trade.fromTiles)}
+      </div>
+      <div class="trade-swap-icon compact">↔</div>
+      <div class="trade-offer-side">
+        <h4>${safeText(to?.name || "Igrač")} daje</h4>
+        ${makeTradeDetailSide(trade.toMoney, trade.toTiles)}
+      </div>
+    </div>
+    <div class="trade-send-row wrap">
+      <button class="trade-back-button" onclick="closeTradeModal()">Zatvori</button>
+      ${canAccept ? `<button class="trade-accept-button" onclick="acceptTrade(${trade.id})">Prihvati</button>` : ""}
+      ${canDecline ? `<button class="trade-decline-button" onclick="declineTrade(${trade.id})">Odbij</button>` : ""}
+      ${canCancel ? `<button class="trade-cancel-button" onclick="cancelTrade(${trade.id})">Otkaži</button>` : ""}
+      ${canNegotiate ? `<button class="trade-send-button" onclick="negotiateTrade(${trade.id})">Pregovaraj</button>` : ""}
+    </div>
+  `;
+  tradeOverlay.classList.remove("hidden");
+}
+
+function makeTradeDetailSide(moneyAmount, tileIndexes) {
+  const parts = [];
+  if (moneyAmount > 0) parts.push(`<div class="trade-detail-money">${money(moneyAmount)}</div>`);
+  if (tileIndexes.length) {
+    parts.push(tileIndexes.map(tileIndex => {
+      const tile = tiles[tileIndex];
+      const propertyColor = tile?.type === "property" ? tile.color : tile?.type === "utility" ? "#00a28f" : "#607d8b";
+      return `<div class="trade-detail-property"><span class="trade-property-color" style="--property-color:${propertyColor}"></span>${safeText(tile?.name || "Polje")}</div>`;
+    }).join(""));
+  }
+  return parts.length ? parts.join("") : `<div class="trade-detail-empty">Ništa</div>`;
+}
+
+function negotiateTrade(tradeId) {
+  const trade = trades.find(item => item.id === Number(tradeId) && item.status === "pending");
+  if (!trade) return showError("Razmena nije pronađena.");
+  const me = myPlayerIndex();
+  if (me !== trade.from && me !== trade.to) return showError("Možeš pregovarati samo oko svojih razmena.");
+
+  const other = me === trade.from ? trade.to : trade.from;
+  activeTradeDraft = {
+    from: me,
+    to: other,
+    fromMoney: me === trade.from ? trade.fromMoney : trade.toMoney,
+    toMoney: me === trade.from ? trade.toMoney : trade.fromMoney,
+    fromTiles: me === trade.from ? [...trade.fromTiles] : [...trade.toTiles],
+    toTiles: me === trade.from ? [...trade.toTiles] : [...trade.fromTiles]
+  };
+  renderTradeBuilder("Pregovaraj i pošalji novu ponudu");
 }
 
 function openTradePlayerPicker() {
@@ -729,7 +878,7 @@ function chooseTradeTarget(targetIndex) {
   renderTradeBuilder();
 }
 
-function renderTradeBuilder() {
+function renderTradeBuilder(title = "Napravi razmenu") {
   if (!activeTradeDraft || activeTradeDraft.to === null) return;
 
   const from = players[activeTradeDraft.from];
@@ -739,7 +888,7 @@ function renderTradeBuilder() {
 
   tradeModal.innerHTML = `
     <button class="modal-close-button" onclick="closeTradeModal()">×</button>
-    <h3>Napravi razmenu</h3>
+    <h3>${safeText(title)}</h3>
     <div class="trade-builder">
       ${makeTradeColumnHtml("from", from, activeTradeDraft.from, fromMoneyMax)}
       <div class="trade-swap-icon">↔</div>
@@ -759,6 +908,7 @@ function makeTradeColumnHtml(side, player, playerIndex, moneyMax) {
   const moneyInputId = side === "from" ? "tradeFromMoney" : "tradeToMoney";
   const moneyLabelId = side === "from" ? "tradeFromMoneyLabel" : "tradeToMoneyLabel";
   const checkboxName = side === "from" ? "tradeFromTile" : "tradeToTile";
+  const currentMoney = side === "from" ? Number(activeTradeDraft.fromMoney || 0) : Number(activeTradeDraft.toMoney || 0);
 
   return `
     <div class="trade-column">
@@ -768,7 +918,7 @@ function makeTradeColumnHtml(side, player, playerIndex, moneyMax) {
       </div>
       <div class="trade-money-control">
         <label><span>Novac</span><strong id="${moneyLabelId}">${money(0)}</strong></label>
-        <input id="${moneyInputId}" type="range" min="0" max="${moneyMax}" step="10" value="0" oninput="updateTradeMoneyLabels()" />
+        <input id="${moneyInputId}" type="range" min="0" max="${moneyMax}" step="10" value="${Math.min(currentMoney, moneyMax)}" oninput="updateTradeMoneyLabels()" />
         <label><span>Ima</span><strong>${money(player.money)}</strong></label>
       </div>
       <div class="trade-property-list">
@@ -780,12 +930,14 @@ function makeTradeColumnHtml(side, player, playerIndex, moneyMax) {
 
 function makeTradePropertyRow(tileIndex, checkboxName) {
   const tile = tiles[tileIndex];
+  const checkedTiles = checkboxName === "tradeFromTile" ? (activeTradeDraft?.fromTiles || []) : (activeTradeDraft?.toTiles || []);
+  const checked = checkedTiles.includes(tileIndex) ? "checked" : "";
   const propertyColor = tile.type === "property" ? tile.color : tile.type === "utility" ? "#00a28f" : "#607d8b";
   const extra = tile.type === "property" && tile.houses ? ` · ${tile.houses === 5 ? "hotel" : `${tile.houses} kuća`}` : "";
 
   return `
     <label class="trade-property-row">
-      <input type="checkbox" name="${checkboxName}" value="${tileIndex}" />
+      <input type="checkbox" name="${checkboxName}" value="${tileIndex}" ${checked} />
       <span><span class="trade-property-color" style="--property-color:${propertyColor}"></span></span>
       <span>${safeText(tile.name)}${safeText(extra)}</span>
       <span class="trade-property-price">${money(tile.price)}</span>
@@ -827,14 +979,17 @@ function sendTradeOffer() {
 
 function acceptTrade(tradeId) {
   socket.emit("trade:accept", { tradeId });
+  closeTradeModal();
 }
 
 function declineTrade(tradeId) {
   socket.emit("trade:decline", { tradeId });
+  closeTradeModal();
 }
 
 function cancelTrade(tradeId) {
   socket.emit("trade:cancel", { tradeId });
+  closeTradeModal();
 }
 
 function canAcceptTrade(trade) {
@@ -885,7 +1040,7 @@ function closeTradeModal() {
 
 function declareBankruptcy() {
   const me = players[myPlayerIndex()];
-  if (!me || me.bankrupt || me.money > 0) return;
+  if (!me || me.bankrupt || roomStatus !== "playing") return;
   const ok = confirm(`${me.name} napušta igru i gubi sva kupljena polja. Nastaviti?`);
   if (!ok) return;
   socket.emit("game:bankrupt");
@@ -1118,7 +1273,19 @@ function money(amount) {
 }
 
 function randomNumber(min, max) {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
+  const range = max - min + 1;
+  if (window.crypto && window.crypto.getRandomValues) {
+    const maxUint = 0xffffffff;
+    const limit = maxUint - (maxUint % range);
+    const buffer = new Uint32Array(1);
+    let value;
+    do {
+      window.crypto.getRandomValues(buffer);
+      value = buffer[0];
+    } while (value >= limit);
+    return min + (value % range);
+  }
+  return min + Math.floor(Date.now() % range);
 }
 
 function sleep(ms) {

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="sr">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -22,15 +22,11 @@
 
       <div class="single-setup-grid">
         <label>Ime igrača
-          <input id="playerName" value="Spartan" maxlength="16" />
+          <input id="playerName" placeholder="Unesi ime" maxlength="16" autocomplete="nickname" />
         </label>
         <label>Boja
-          <select id="playerColor">
-            <option value="#2f6bff" selected>Plava</option>
-            <option value="#22c55e">Zelena</option>
-            <option value="#f59e0b">Narandžasta</option>
-            <option value="#ef476f">Roze</option>
-          </select>
+          <input id="playerColor" type="hidden" value="#2f6bff" />
+          <div id="playerColorOptions" class="color-options" aria-label="Izbor boje igrača"></div>
         </label>
       </div>
 
