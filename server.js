@@ -881,8 +881,8 @@ function canAcceptTrade(room, trade) {
   const to = room.players[trade.to];
   if (!from || !to) return { ok: false, reason: 'A player no longer exists.' };
   if (from.bankrupt || to.bankrupt) return { ok: false, reason: 'A player in this trade is bankrupt.' };
-  if (from.money < trade.fromMoney) return { ok: false, reason: `${from.name} does not have enough money.` };
-  if (to.money < trade.toMoney) return { ok: false, reason: `${to.name} does not have enough money.` };
+  if (trade.fromMoney > 0 && from.money < trade.fromMoney) return { ok: false, reason: `${from.name} does not have enough money.` };
+  if (trade.toMoney > 0 && to.money < trade.toMoney) return { ok: false, reason: `${to.name} does not have enough money.` };
   for (const tileIndex of trade.fromTiles) {
     if (!isPurchasableTile(room.tiles[tileIndex]) || room.tiles[tileIndex].owner !== trade.from) return { ok: false, reason: `${room.tiles[tileIndex]?.name || 'A property'} is no longer owned by ${from.name}.` };
   }
