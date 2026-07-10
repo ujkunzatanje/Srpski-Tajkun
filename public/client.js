@@ -38,6 +38,8 @@ let joinedByRoomLink = false;
 let unavailableColors = [];
 let selectedPlayerColor = "#2f6bff";
 let peekTimer = null;
+let tradeNoticeEl = null;
+let tradeNoticeTimer = null;
 
 const setupColorChoices = [
   { name: "Plava", value: "#2f6bff" },
@@ -85,6 +87,7 @@ const copyRoomBtn = document.getElementById("copyRoomBtn");
 const leaveRoomBtn = document.getElementById("leaveRoomBtn");
 const joinLinkNotice = document.getElementById("joinLinkNotice");
 const turnTimer = document.getElementById("turnTimer");
+const centerPanel = document.querySelector(".center-panel");
 
 createRoomBtn.addEventListener("click", createRoom);
 joinRoomBtn.addEventListener("click", joinRoom);
@@ -114,6 +117,7 @@ setDieValue(die1, 1);
 setDieValue(die2, 1);
 renderColorOptions();
 createBoardTiles();
+ensureTradeNotice();
 connectSocket();
 showLastRoomOption();
 readRoomFromUrl();
@@ -354,6 +358,7 @@ function setConnectionStatus(text, mode) {
 
 function applyState(state, options = {}) {
   if (!state) return;
+  const previousTrades = trades || [];
   roomCode = state.code;
   players = state.players || [];
   tiles = state.tiles || [];
@@ -366,6 +371,7 @@ function applyState(state, options = {}) {
   lastRollTotal = state.lastRollTotal || 0;
   lastDice = state.lastDice || [1, 1];
   trades = state.trades || [];
+  handleIncomingTradeNotifications(previousTrades, trades);
   vacationPot = Number(state.vacationPot) || 0;
   jailFee = Number(state.jailFee) || 60;
   canRollAgain = Boolean(state.canRollAgain);
@@ -382,6 +388,50 @@ function applyState(state, options = {}) {
     setDieValue(die2, lastDice[1] || 1);
   }
   if (!options.skipRender) renderAll();
+}
+
+
+function ensureTradeNotice() {
+  if (tradeNoticeEl || !centerPanel) return;
+  tradeNoticeEl = document.createElement("div");
+  tradeNoticeEl.id = "tradeNotice";
+  tradeNoticeEl.className = "trade-notice hidden";
+  tradeNoticeEl.addEventListener("click", hideTradeNotice);
+  centerPanel.appendChild(tradeNoticeEl);
+}
+
+function showTradeNotice(message, duration = 5000) {
+  ensureTradeNotice();
+  if (!tradeNoticeEl) return;
+  tradeNoticeEl.textContent = message;
+  tradeNoticeEl.classList.remove("hidden");
+  tradeNoticeEl.classList.add("visible");
+  clearTimeout(tradeNoticeTimer);
+  tradeNoticeTimer = setTimeout(hideTradeNotice, duration);
+}
+
+function hideTradeNotice() {
+  if (!tradeNoticeEl) return;
+  tradeNoticeEl.classList.remove("visible");
+  tradeNoticeEl.classList.add("hidden");
+}
+
+function handleIncomingTradeNotifications(previousTrades = [], nextTrades = []) {
+  const me = myPlayerIndex();
+  if (me < 0 || !Array.isArray(nextTrades)) return;
+  const previousIncomingIds = new Set(
+    previousTrades
+      .filter(trade => trade && trade.status === "pending" && trade.to === me)
+      .map(trade => trade.id)
+  );
+
+  const newIncoming = nextTrades.filter(trade =>
+    trade && trade.status === "pending" && trade.to === me && !previousIncomingIds.has(trade.id)
+  );
+
+  if (!newIncoming.length) return;
+  const newestTrade = newIncoming[0];
+  showTradeNotice(newestTrade.kind === "counter" || newestTrade.replyTo ? "IMAS KONTRA PONUDU!" : "IMAS PONUDU!");
 }
 
 function createBoardTiles() {
@@ -795,7 +845,10 @@ function renderTrades() {
     const from = players[trade.from];
     const to = players[trade.to];
     const mine = from?.id === myPlayerId || to?.id === myPlayerId;
-    const label = `${safeText(from?.name || "Igrač")} je poslao ponudu igraču ${safeText(to?.name || "Igrač")}`;
+    const isCounter = trade.kind === "counter" || trade.replyTo;
+    const label = isCounter
+      ? `${safeText(from?.name || "Igrač")} je poslao kontra ponudu igraču ${safeText(to?.name || "Igrač")}`
+      : `${safeText(from?.name || "Igrač")} je poslao ponudu igraču ${safeText(to?.name || "Igrač")}`;
     return `
       <button class="trade-list-item${mine ? " mine" : ""}" onclick="openTradeOffer(${trade.id})">
         <span class="trade-list-main">${label}</span>
@@ -815,11 +868,12 @@ function openTradeOffer(tradeId) {
   const canDecline = to?.id === myPlayerId;
   const canCancel = from?.id === myPlayerId;
   const canNegotiate = me === trade.from || me === trade.to;
+  const isCounter = trade.kind === "counter" || trade.replyTo;
 
   tradeModal.innerHTML = `
     <button class="modal-close-button" onclick="closeTradeModal()">×</button>
-    <h3>Ponuda za razmenu</h3>
-    <p class="trade-help">${safeText(from?.name || "Igrač")} je poslao ponudu igraču ${safeText(to?.name || "Igrač")}.</p>
+    <h3>${isCounter ? "Kontra ponuda" : "Ponuda za razmenu"}</h3>
+    <p class="trade-help">${safeText(from?.name || "Igrač")} je ${isCounter ? "poslao kontra ponudu" : "poslao ponudu"} igraču ${safeText(to?.name || "Igrač")}.</p>
     <div class="trade-offer-detail">
       <div class="trade-offer-side">
         <h4>${safeText(from?.name || "Igrač")} nudi</h4>
@@ -868,7 +922,8 @@ function negotiateTrade(tradeId) {
     fromMoney: me === trade.from ? trade.fromMoney : trade.toMoney,
     toMoney: me === trade.from ? trade.toMoney : trade.fromMoney,
     fromTiles: me === trade.from ? [...trade.fromTiles] : [...trade.toTiles],
-    toTiles: me === trade.from ? [...trade.toTiles] : [...trade.fromTiles]
+    toTiles: me === trade.from ? [...trade.toTiles] : [...trade.fromTiles],
+    replaceTradeId: trade.id
   };
   renderTradeBuilder("Pregovaraj i pošalji novu ponudu");
 }
@@ -892,7 +947,8 @@ function openTradePlayerPicker() {
     fromMoney: 0,
     toMoney: 0,
     fromTiles: [],
-    toTiles: []
+    toTiles: [],
+    replaceTradeId: null
   };
 
   tradeModal.innerHTML = `
@@ -926,6 +982,10 @@ function renderTradeBuilder(title = "Napravi razmenu") {
   const fromMoneyMax = Math.max(0, from.money);
   const toMoneyMax = Math.max(0, to.money);
 
+  const backAction = activeTradeDraft?.replaceTradeId
+    ? `openTradeOffer(${Number(activeTradeDraft.replaceTradeId) || 0})`
+    : "openTradePlayerPicker()";
+
   tradeModal.innerHTML = `
     <button class="modal-close-button" onclick="closeTradeModal()">×</button>
     <h3>${safeText(title)}</h3>
@@ -935,7 +995,7 @@ function renderTradeBuilder(title = "Napravi razmenu") {
       ${makeTradeColumnHtml("to", to, activeTradeDraft.to, toMoneyMax)}
     </div>
     <div class="trade-send-row">
-      <button class="trade-back-button" onclick="openTradePlayerPicker()">Nazad</button>
+      <button class="trade-back-button" onclick="${backAction}">Nazad</button>
       <button class="trade-send-button" onclick="sendTradeOffer()">Pošalji razmenu</button>
     </div>
   `;
@@ -1012,7 +1072,8 @@ function sendTradeOffer() {
     fromMoney,
     toMoney,
     fromTiles,
-    toTiles
+    toTiles,
+    replaceTradeId: activeTradeDraft.replaceTradeId || null
   });
   closeTradeModal();
 }

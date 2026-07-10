@@ -515,23 +515,49 @@ io.on('connection', socket => {
     if (!room) return emitError(socket, 'Soba nije pronađena.');
     const from = findPlayerIndex(room, socket.data.playerId);
     if (from < 0) return emitError(socket, 'Nisi u ovoj sobi.');
+
+    const requestedTo = Number(payload.to);
+    if (!Number.isInteger(requestedTo) || requestedTo < 0 || requestedTo >= room.players.length || requestedTo === from) {
+      return emitError(socket, 'Izabrani igrač za razmenu nije ispravan.');
+    }
+
+    let originalTrade = null;
+    const replaceTradeId = Number(payload.replaceTradeId);
+    if (Number.isInteger(replaceTradeId) && replaceTradeId > 0) {
+      originalTrade = room.trades.find(item => item.id === replaceTradeId && item.status === 'pending');
+      if (!originalTrade) return emitError(socket, 'Originalna ponuda više ne postoji.');
+      if (originalTrade.from !== from && originalTrade.to !== from) return emitError(socket, 'Možeš da pregovaraš samo o svojim ponudama.');
+      const otherParty = originalTrade.from === from ? originalTrade.to : originalTrade.from;
+      if (requestedTo !== otherParty) return emitError(socket, 'Kontra ponuda mora da ide istom igraču.');
+    }
+
     const trade = {
       id: room.tradeIdCounter++,
       from,
-      to: Number(payload.to),
+      to: requestedTo,
       fromMoney: clampMoney(payload.fromMoney),
       toMoney: clampMoney(payload.toMoney),
       fromTiles: uniqueTileIndexes(payload.fromTiles),
       toTiles: uniqueTileIndexes(payload.toTiles),
-      status: 'pending'
+      status: 'pending',
+      kind: originalTrade ? 'counter' : 'offer',
+      replyTo: originalTrade ? originalTrade.id : null
     };
     if (trade.fromMoney <= 0 && trade.toMoney <= 0 && trade.fromTiles.length === 0 && trade.toTiles.length === 0) {
       return emitError(socket, 'Izaberi novac ili bar jedno polje za razmenu.');
     }
     const validation = canAcceptTrade(room, trade);
     if (!validation.ok) return emitError(socket, validation.reason);
+
+    if (originalTrade) {
+      originalTrade.status = 'countered';
+      room.trades = room.trades.filter(item => item.id !== originalTrade.id && item.status === 'pending');
+      addLog(room, `${room.players[from].name} je poslao kontra ponudu igraču ${room.players[trade.to].name}.`);
+    } else {
+      addLog(room, `${room.players[from].name} je poslao ponudu za razmenu igraču ${room.players[trade.to].name}.`);
+    }
+
     room.trades.unshift(trade);
-    addLog(room, `${room.players[from].name} je poslao ponudu za razmenu igraču ${room.players[trade.to].name}.`);
     touchRoom(room);
     emitRoom(room);
   });
