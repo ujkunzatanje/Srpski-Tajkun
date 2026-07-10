@@ -239,6 +239,8 @@ function createRoom(hostPlayer) {
     vacationPot: 0,
     canRollAgain: false,
     doubleRollCount: 0,
+    diceDeck: makeDiceDeck(),
+    recentDiceTotals: [],
     timerPhase: null,
     turnDeadline: null,
     turnTimerHandle: null
@@ -353,16 +355,24 @@ function reconnectSeat(socket, room, player, logMessage) {
 io.on('connection', socket => {
   socket.on('room:peek', (payload = {}) => {
     const room = getRoom(payload.roomCode);
+    const requestTag = String(payload.requestTag || '');
     if (!room) {
-      socket.emit('room:peekResult', { roomCode: cleanRoomCode(payload.roomCode), exists: false, takenColors: [] });
+      socket.emit('room:peekResult', { roomCode: cleanRoomCode(payload.roomCode), exists: false, takenColors: [], requestTag, canReconnect: false });
       return;
     }
+
+    const requestedPlayerId = String(payload.playerId || '');
+    const reconnectPlayer = requestedPlayerId ? findPlayer(room, requestedPlayerId) : null;
+    const canReconnect = Boolean(reconnectPlayer && !reconnectPlayer.bankrupt && !reconnectPlayer.kicked && room.status !== 'ended');
+
     socket.emit('room:peekResult', {
       roomCode: room.code,
       exists: true,
       status: room.status,
       playerCount: room.players.filter(player => !player.bankrupt).length,
-      takenColors: room.players.filter(player => !player.bankrupt).map(player => player.color)
+      takenColors: room.players.filter(player => !player.bankrupt).map(player => player.color),
+      requestTag,
+      canReconnect
     });
   });
 
@@ -772,8 +782,7 @@ function performRollDice(room, playerIndex, automatic) {
 
   clearTurnTimer(room);
   const startState = publicRoomState(room);
-  const d1 = randomNumber(1, 6);
-  const d2 = randomNumber(1, 6);
+  const [d1, d2] = drawDice(room);
   const total = d1 + d2;
   const paths = { [playerIndex]: [] };
   const isDouble = d1 === d2;
@@ -838,8 +847,7 @@ function performJailRoll(room, playerIndex, automatic) {
   const player = room.players[playerIndex];
   clearTurnTimer(room);
   const startState = publicRoomState(room);
-  const d1 = randomNumber(1, 6);
-  const d2 = randomNumber(1, 6);
+  const [d1, d2] = drawDice(room);
   const paths = { [playerIndex]: [] };
   room.diceRolled = true;
   room.canRollAgain = false;
@@ -1280,6 +1288,43 @@ function clampMoney(value) {
 function addLog(room, message) {
   room.logs.unshift(message);
   room.logs = room.logs.slice(0, 100);
+}
+
+
+function makeDiceDeck() {
+  const deck = [];
+  for (let d1 = 1; d1 <= 6; d1++) {
+    for (let d2 = 1; d2 <= 6; d2++) {
+      deck.push([d1, d2]);
+    }
+  }
+  return shuffle(deck);
+}
+
+function drawDice(room) {
+  if (!room.diceDeck || room.diceDeck.length <= 12) {
+    room.diceDeck = makeDiceDeck();
+  }
+
+  let dice = room.diceDeck.shift();
+  if (!dice) {
+    room.diceDeck = makeDiceDeck();
+    dice = room.diceDeck.shift();
+  }
+
+  const total = dice[0] + dice[1];
+  const recentTotals = Array.isArray(room.recentDiceTotals) ? room.recentDiceTotals : [];
+  const wouldBeThirdSameTotal = recentTotals.length >= 2 && recentTotals[0] === total && recentTotals[1] === total;
+
+  if (wouldBeThirdSameTotal && room.diceDeck.length > 0) {
+    const replacement = room.diceDeck.shift();
+    room.diceDeck.push(dice);
+    dice = replacement;
+  }
+
+  const finalTotal = dice[0] + dice[1];
+  room.recentDiceTotals = [finalTotal, ...recentTotals].slice(0, 2);
+  return dice;
 }
 
 function randomNumber(min, max) {

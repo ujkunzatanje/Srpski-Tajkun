@@ -2136,3 +2136,20 @@ button:disabled {
     opacity: 0.88;
   }
 }
+
+/* Version 14 refinements */
+.trade-notice {
+  top: calc((var(--tile-size) * 1.35) + var(--gap) + 10px);
+  z-index: 60;
+  pointer-events: auto;
+}
+
+@media (max-width: 720px) {
+  .trade-notice {
+    top: calc((var(--tile-size) * 1.35) + var(--gap) + 6px);
+    min-width: min(88%, 260px);
+    max-width: 88%;
+    padding: 8px 10px;
+    font-size: 14px;
+  }
+}

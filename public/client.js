@@ -128,6 +128,7 @@ function connectSocket() {
   socket.on("connect", () => {
     setConnectionStatus("Povezano", "ok");
     requestRoomPeek();
+    showLastRoomOption();
   });
 
   socket.on("disconnect", () => {
@@ -178,6 +179,17 @@ function connectSocket() {
   });
 
   socket.on("room:peekResult", payload => {
+    if (payload.requestTag === "lastRoom") {
+      if (payload.exists && payload.status !== "ended" && payload.canReconnect) {
+        lastRoomCodeText.textContent = payload.roomCode;
+        lastRoomBox.classList.remove("hidden");
+      } else {
+        lastRoomBox.classList.add("hidden");
+        localStorage.removeItem("serbiaPropertyOnlineSession");
+      }
+      return;
+    }
+
     const currentCode = cleanRoomCode(roomCodeInput.value);
     if (payload.roomCode && currentCode && payload.roomCode !== currentCode) return;
     unavailableColors = Array.isArray(payload.takenColors) ? payload.takenColors : [];
@@ -335,9 +347,10 @@ function getSavedPlayerIdForRoom(code) {
 
 function showLastRoomOption() {
   const saved = getSavedSession();
+  lastRoomBox.classList.add("hidden");
   if (!saved || !saved.roomCode || !saved.playerId) return;
-  lastRoomCodeText.textContent = saved.roomCode;
-  lastRoomBox.classList.remove("hidden");
+  if (!socket || !socket.connected) return;
+  socket.emit("room:peek", { roomCode: saved.roomCode, playerId: saved.playerId, requestTag: "lastRoom" });
 }
 
 function startHeartbeat() {
@@ -392,12 +405,12 @@ function applyState(state, options = {}) {
 
 
 function ensureTradeNotice() {
-  if (tradeNoticeEl || !centerPanel) return;
+  if (tradeNoticeEl || !board) return;
   tradeNoticeEl = document.createElement("div");
   tradeNoticeEl.id = "tradeNotice";
   tradeNoticeEl.className = "trade-notice hidden";
   tradeNoticeEl.addEventListener("click", hideTradeNotice);
-  centerPanel.appendChild(tradeNoticeEl);
+  board.appendChild(tradeNoticeEl);
 }
 
 function showTradeNotice(message, duration = 5000) {
