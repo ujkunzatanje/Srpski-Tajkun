@@ -14,6 +14,7 @@ const MAX_PLAYERS = 4;
 const ROOM_IDLE_DELETE_MS = 30 * 60 * 1000;
 const ENDED_ROOM_DELETE_MS = 5 * 60 * 1000;
 const JAIL_FEE = 60;
+const ADMIN_STATS_KEY = process.env.ADMIN_STATS_KEY || 'kuntaj1312';
 
 const app = express();
 const server = http.createServer(app);
@@ -23,8 +24,25 @@ const io = new Server(server, {
   pingTimeout: 20000
 });
 
-app.use(express.static(path.join(__dirname, 'public')));
 app.get('/health', (_req, res) => res.status(200).json({ ok: true, rooms: rooms.size }));
+app.get('/stats', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'stats.html')));
+app.get('/api/stats', (req, res) => {
+  if (!isValidStatsKey(req.query.key)) return res.status(403).json({ ok: false, error: 'Pogrešan stats ključ.' });
+
+  const roomCode = cleanRoomCode(req.query.room || '');
+  if (roomCode) {
+    const room = getRoom(roomCode);
+    if (!room) return res.status(404).json({ ok: false, error: 'Soba nije pronađena ili je već obrisana.' });
+    return res.status(200).json(buildStatsExport(room));
+  }
+
+  return res.status(200).json({
+    ok: true,
+    generatedAt: new Date().toISOString(),
+    rooms: [...rooms.values()].map(makeStatsRoomSummary)
+  });
+});
+app.use(express.static(path.join(__dirname, 'public')));
 
 const rooms = new Map();
 
@@ -215,12 +233,13 @@ function makeEventDeck() {
 
 function createRoom(hostPlayer) {
   const code = makeRoomCode();
+  const roomTiles = makeTiles();
   const room = {
     code,
     hostId: hostPlayer.id,
     status: 'lobby',
     players: [hostPlayer],
-    tiles: makeTiles(),
+    tiles: roomTiles,
     currentPlayerIndex: 0,
     diceRolled: false,
     landedTileIndex: null,
@@ -243,7 +262,8 @@ function createRoom(hostPlayer) {
     recentDiceTotals: [],
     timerPhase: null,
     turnDeadline: null,
-    turnTimerHandle: null
+    turnTimerHandle: null,
+    stats: makeStats(code, roomTiles, [hostPlayer])
   };
   addLog(room, `${hostPlayer.name} je napravio sobu ${code}.`);
   rooms.set(code, room);
@@ -419,6 +439,7 @@ io.on('connection', socket => {
     const playerId = payload.playerId || makePlayerId();
     const player = makePlayer({ id: playerId, socketId: socket.id, name: payload.name, color: payload.color });
     room.players.push(player);
+    ensurePlayerStats(room, player);
     touchRoom(room);
     addLog(room, `${player.name} se pridružio sobi.`);
     socket.join(room.code);
@@ -445,6 +466,10 @@ io.on('connection', socket => {
     if (room.status !== 'lobby') return emitError(socket, 'Igra je već počela.');
 
     room.status = 'playing';
+    room.stats.game.startedAt = new Date().toISOString();
+    room.stats.game.status = 'playing';
+    room.stats.game.playerCount = room.players.filter(player => !player.bankrupt).length;
+    room.players.forEach(player => ensurePlayerStats(room, player));
     room.actionText = `${room.players[0].name}, baci kockice.`;
     addLog(room, `Igra je počela. Broj igrača: ${room.players.length}.`);
     scheduleRollTimer(room);
@@ -503,6 +528,7 @@ io.on('connection', socket => {
 
     player.money -= tile.price;
     tile.owner = playerIndex;
+    recordPurchase(room, playerIndex, room.landedTileIndex, tile.price);
     room.actionText = `${player.name} je kupio ${tile.name} za ${money(tile.price)}.`;
     addLog(room, room.actionText);
     checkDebt(room, player);
@@ -562,8 +588,10 @@ io.on('connection', socket => {
     if (originalTrade) {
       originalTrade.status = 'countered';
       room.trades = room.trades.filter(item => item.id !== originalTrade.id && item.status === 'pending');
+      recordTrade(room, 'countered');
       addLog(room, `${room.players[from].name} je poslao kontra ponudu igraču ${room.players[trade.to].name}.`);
     } else {
+      recordTrade(room, 'created');
       addLog(room, `${room.players[from].name} je poslao ponudu za razmenu igraču ${room.players[trade.to].name}.`);
     }
 
@@ -590,6 +618,7 @@ io.on('connection', socket => {
     trade.toTiles.forEach(tileIndex => { room.tiles[tileIndex].owner = trade.from; });
     trade.status = 'accepted';
     room.trades = room.trades.filter(item => item.status === 'pending');
+    recordTrade(room, 'accepted');
     addLog(room, `${to.name} je prihvatio ponudu za razmenu od ${from.name}.`);
     checkDebt(room, from);
     checkDebt(room, to);
@@ -608,6 +637,7 @@ io.on('connection', socket => {
     const to = room.players[trade.to];
     trade.status = 'declined';
     room.trades = room.trades.filter(item => item.status === 'pending');
+    recordTrade(room, 'declined');
     addLog(room, `${to?.name || 'Igrač'} je odbio ponudu za razmenu od ${from?.name || 'Igrač'}.`);
     touchRoom(room);
     emitRoom(room);
@@ -623,6 +653,7 @@ io.on('connection', socket => {
     const from = room.players[trade.from];
     trade.status = 'cancelled';
     room.trades = room.trades.filter(item => item.status === 'pending');
+    recordTrade(room, 'cancelled');
     addLog(room, `${from?.name || 'Igrač'} je otkazao svoju ponudu za razmenu.`);
     touchRoom(room);
     emitRoom(room);
@@ -649,13 +680,16 @@ io.on('connection', socket => {
       const cost = getBuildingBuildCost(tile);
       player.money -= cost;
       tile.houses += 1;
+      recordBuilding(room, playerIndex, tileIndex, 'build', cost, tile.houses === 5 ? 'hotel' : 'house');
       const buildingName = tile.houses === 5 ? 'hotel' : `kuću ${tile.houses}`;
       addLog(room, `${player.name} je izgradio ${buildingName} na ${tile.name} za ${money(cost)}.`);
     } else {
       const refund = getBuildingSellRefund(tile);
+      const removedType = tile.houses === 5 ? 'hotel' : 'house';
       const removedName = tile.houses === 5 ? 'hotel' : 'kuću';
       tile.houses -= 1;
       player.money += refund;
+      recordBuilding(room, playerIndex, tileIndex, 'sell', refund, removedType);
       addLog(room, `${player.name} je prodao ${removedName} sa ${tile.name} i dobio ${money(refund)}.`);
     }
 
@@ -716,6 +750,386 @@ io.on('connection', socket => {
     }
   });
 });
+
+
+function isValidStatsKey(key) {
+  return String(key || '') === ADMIN_STATS_KEY;
+}
+
+function makeStats(roomCode, tiles, players = []) {
+  const stats = {
+    version: 1,
+    roomCode,
+    createdAt: new Date().toISOString(),
+    generatedAt: null,
+    game: {
+      status: 'lobby',
+      startedAt: null,
+      endedAt: null,
+      durationMs: null,
+      playerCount: players.length,
+      turnsEnded: 0,
+      winner: null
+    },
+    rolls: {
+      totalRolls: 0,
+      combinations: makeEmptyDiceCombinations(),
+      totals: makeEmptyDiceTotals(),
+      doubles: 0,
+      jailRolls: 0,
+      automaticRolls: 0,
+      threeDoublesToJail: 0,
+      redrawnThirdSameTotal: 0,
+      sumTotal: 0,
+      averageTotal: 0,
+      lastTotals: []
+    },
+    tiles: {},
+    economy: {
+      rentTotal: 0,
+      taxTotal: 0,
+      startPassTotal: 0,
+      startLandTotal: 0,
+      odmorPaidTotal: 0,
+      cardNetTotal: 0,
+      purchasesTotal: 0,
+      buildingSpendTotal: 0,
+      buildingRefundTotal: 0,
+      bankPaymentsTotal: 0
+    },
+    cards: {
+      draws: 0,
+      byText: {}
+    },
+    trades: {
+      created: 0,
+      accepted: 0,
+      declined: 0,
+      cancelled: 0,
+      countered: 0
+    },
+    jail: {
+      sentToJail: 0,
+      paidToLeave: 0,
+      rollAttempts: 0,
+      rollSuccess: 0,
+      rollFailPaid: 0,
+      threeDoubles: 0,
+      feesPaid: 0
+    },
+    bankruptcies: {
+      declared: 0,
+      kicked: 0
+    },
+    players: {}
+  };
+
+  tiles.forEach((tile, index) => {
+    stats.tiles[index] = {
+      index,
+      name: tile.name,
+      type: tile.type,
+      group: tile.group || null,
+      landed: 0,
+      passed: 0,
+      bought: 0,
+      rentPaid: 0,
+      rentEvents: 0,
+      taxesPaid: 0,
+      odmorPaid: 0,
+      housesBuilt: 0,
+      hotelsBuilt: 0,
+      housesSold: 0,
+      hotelsSold: 0
+    };
+  });
+
+  players.forEach(player => ensurePlayerStatsObject(stats, player));
+  return stats;
+}
+
+function makeEmptyDiceCombinations() {
+  const combinations = {};
+  for (let d1 = 1; d1 <= 6; d1++) {
+    for (let d2 = 1; d2 <= 6; d2++) combinations[`${d1}+${d2}`] = 0;
+  }
+  return combinations;
+}
+
+function makeEmptyDiceTotals() {
+  const totals = {};
+  for (let total = 2; total <= 12; total++) totals[String(total)] = 0;
+  return totals;
+}
+
+function ensurePlayerStatsObject(stats, player) {
+  if (!player || !stats) return null;
+  if (!stats.players[player.id]) {
+    stats.players[player.id] = {
+      id: player.id,
+      name: player.name,
+      color: player.color,
+      rolls: 0,
+      doubles: 0,
+      turnsEnded: 0,
+      landed: {},
+      rentPaid: 0,
+      rentReceived: 0,
+      taxPaid: 0,
+      startMoney: 0,
+      odmorMoney: 0,
+      cardNet: 0,
+      purchases: 0,
+      purchaseSpend: 0,
+      buildingSpend: 0,
+      buildingRefund: 0,
+      tradesAccepted: 0,
+      bankrupt: false,
+      kicked: false
+    };
+  } else {
+    stats.players[player.id].name = player.name;
+    stats.players[player.id].color = player.color;
+  }
+  return stats.players[player.id];
+}
+
+function ensurePlayerStats(room, player) {
+  if (!room || !room.stats || !player) return null;
+  return ensurePlayerStatsObject(room.stats, player);
+}
+
+function getPlayerStatsByIndex(room, playerIndex) {
+  const player = room?.players?.[playerIndex];
+  return ensurePlayerStats(room, player);
+}
+
+function recordRoll(room, playerIndex, d1, d2, options = {}) {
+  if (!room?.stats) return;
+  const total = d1 + d2;
+  const combo = `${d1}+${d2}`;
+  room.stats.rolls.totalRolls += 1;
+  room.stats.rolls.combinations[combo] = (room.stats.rolls.combinations[combo] || 0) + 1;
+  room.stats.rolls.totals[String(total)] = (room.stats.rolls.totals[String(total)] || 0) + 1;
+  room.stats.rolls.sumTotal += total;
+  room.stats.rolls.averageTotal = Number((room.stats.rolls.sumTotal / room.stats.rolls.totalRolls).toFixed(3));
+  room.stats.rolls.lastTotals.push(total);
+  room.stats.rolls.lastTotals = room.stats.rolls.lastTotals.slice(-20);
+  if (d1 === d2) room.stats.rolls.doubles += 1;
+  if (options.jail) room.stats.rolls.jailRolls += 1;
+  if (options.automatic) room.stats.rolls.automaticRolls += 1;
+
+  const pstats = getPlayerStatsByIndex(room, playerIndex);
+  if (pstats) {
+    pstats.rolls += 1;
+    if (d1 === d2) pstats.doubles += 1;
+  }
+}
+
+function recordDiceRedraw(room) {
+  if (room?.stats) room.stats.rolls.redrawnThirdSameTotal += 1;
+}
+
+function recordTilePassed(room, tileIndex, playerIndex) {
+  if (!room?.stats?.tiles?.[tileIndex]) return;
+  room.stats.tiles[tileIndex].passed += 1;
+}
+
+function recordTileLanding(room, tileIndex, playerIndex) {
+  if (!room?.stats?.tiles?.[tileIndex]) return;
+  room.stats.tiles[tileIndex].landed += 1;
+  const pstats = getPlayerStatsByIndex(room, playerIndex);
+  if (pstats) pstats.landed[tileIndex] = (pstats.landed[tileIndex] || 0) + 1;
+}
+
+function recordStartBonus(room, playerIndex, amount, landedOnStart) {
+  if (!room?.stats) return;
+  if (landedOnStart) room.stats.economy.startLandTotal += amount;
+  else room.stats.economy.startPassTotal += amount;
+  const pstats = getPlayerStatsByIndex(room, playerIndex);
+  if (pstats) pstats.startMoney += amount;
+}
+
+function recordPurchase(room, playerIndex, tileIndex, amount) {
+  if (!room?.stats) return;
+  if (room.stats.tiles[tileIndex]) room.stats.tiles[tileIndex].bought += 1;
+  room.stats.economy.purchasesTotal += amount;
+  const pstats = getPlayerStatsByIndex(room, playerIndex);
+  if (pstats) {
+    pstats.purchases += 1;
+    pstats.purchaseSpend += amount;
+  }
+}
+
+function recordRent(room, payerIndex, ownerIndex, tileIndex, amount) {
+  if (!room?.stats) return;
+  if (room.stats.tiles[tileIndex]) {
+    room.stats.tiles[tileIndex].rentPaid += amount;
+    room.stats.tiles[tileIndex].rentEvents += 1;
+  }
+  room.stats.economy.rentTotal += amount;
+  const payerStats = getPlayerStatsByIndex(room, payerIndex);
+  const ownerStats = getPlayerStatsByIndex(room, ownerIndex);
+  if (payerStats) payerStats.rentPaid += amount;
+  if (ownerStats) ownerStats.rentReceived += amount;
+}
+
+function recordTax(room, playerIndex, tileIndex, amount) {
+  if (!room?.stats) return;
+  if (room.stats.tiles[tileIndex]) room.stats.tiles[tileIndex].taxesPaid += amount;
+  room.stats.economy.taxTotal += amount;
+  const pstats = getPlayerStatsByIndex(room, playerIndex);
+  if (pstats) pstats.taxPaid += amount;
+}
+
+function recordOdmorPayout(room, playerIndex, tileIndex, amount) {
+  if (!room?.stats) return;
+  if (room.stats.tiles[tileIndex]) room.stats.tiles[tileIndex].odmorPaid += amount;
+  room.stats.economy.odmorPaidTotal += amount;
+  const pstats = getPlayerStatsByIndex(room, playerIndex);
+  if (pstats) pstats.odmorMoney += amount;
+}
+
+function recordBankPayment(room, playerIndex, amount) {
+  if (!room?.stats) return;
+  room.stats.economy.bankPaymentsTotal += amount;
+}
+
+function recordCard(room, playerIndex, text, moneyDelta) {
+  if (!room?.stats) return;
+  room.stats.cards.draws += 1;
+  if (!room.stats.cards.byText[text]) room.stats.cards.byText[text] = { text, draws: 0, moneyDelta: 0 };
+  room.stats.cards.byText[text].draws += 1;
+  room.stats.cards.byText[text].moneyDelta += moneyDelta;
+  room.stats.economy.cardNetTotal += moneyDelta;
+  const pstats = getPlayerStatsByIndex(room, playerIndex);
+  if (pstats) pstats.cardNet += moneyDelta;
+}
+
+function recordTrade(room, action) {
+  if (!room?.stats?.trades) return;
+  if (typeof room.stats.trades[action] !== 'number') room.stats.trades[action] = 0;
+  room.stats.trades[action] += 1;
+}
+
+function recordBuilding(room, playerIndex, tileIndex, direction, amount, buildingType) {
+  if (!room?.stats) return;
+  const tileStats = room.stats.tiles[tileIndex];
+  const pstats = getPlayerStatsByIndex(room, playerIndex);
+  if (direction === 'build') {
+    room.stats.economy.buildingSpendTotal += amount;
+    if (buildingType === 'hotel') tileStats.hotelsBuilt += 1;
+    else tileStats.housesBuilt += 1;
+    if (pstats) pstats.buildingSpend += amount;
+  } else {
+    room.stats.economy.buildingRefundTotal += amount;
+    if (buildingType === 'hotel') tileStats.hotelsSold += 1;
+    else tileStats.housesSold += 1;
+    if (pstats) pstats.buildingRefund += amount;
+  }
+}
+
+function recordJail(room, playerIndex, action, amount = 0) {
+  if (!room?.stats?.jail) return;
+  if (action === 'sentToJail') room.stats.jail.sentToJail += 1;
+  if (action === 'paidToLeave') {
+    room.stats.jail.paidToLeave += 1;
+    room.stats.jail.feesPaid += amount;
+  }
+  if (action === 'rollSuccess') {
+    room.stats.jail.rollAttempts += 1;
+    room.stats.jail.rollSuccess += 1;
+  }
+  if (action === 'rollFailPaid') {
+    room.stats.jail.rollAttempts += 1;
+    room.stats.jail.rollFailPaid += 1;
+    room.stats.jail.feesPaid += amount;
+  }
+  if (action === 'threeDoubles') {
+    room.stats.jail.threeDoubles += 1;
+    room.stats.rolls.threeDoublesToJail += 1;
+  }
+}
+
+function recordTurnEnded(room, playerIndex) {
+  if (!room?.stats) return;
+  room.stats.game.turnsEnded += 1;
+  const pstats = getPlayerStatsByIndex(room, playerIndex);
+  if (pstats) pstats.turnsEnded += 1;
+}
+
+function recordBankruptcy(room, playerIndex, type) {
+  if (!room?.stats) return;
+  if (type === 'kick') room.stats.bankruptcies.kicked += 1;
+  else room.stats.bankruptcies.declared += 1;
+  const pstats = getPlayerStatsByIndex(room, playerIndex);
+  if (pstats) {
+    pstats.bankrupt = true;
+    if (type === 'kick') pstats.kicked = true;
+  }
+}
+
+function finishStats(room, winner) {
+  if (!room?.stats) return;
+  room.stats.game.status = 'ended';
+  room.stats.game.endedAt = new Date().toISOString();
+  room.stats.game.winner = winner ? { id: winner.id, name: winner.name, color: winner.color } : null;
+  const start = room.stats.game.startedAt ? Date.parse(room.stats.game.startedAt) : room.createdAt;
+  room.stats.game.durationMs = Number.isFinite(start) ? Date.now() - start : null;
+}
+
+function makeStatsRoomSummary(room) {
+  return {
+    code: room.code,
+    status: room.status,
+    playerCount: room.players.filter(player => !player.bankrupt).length,
+    players: room.players.map(player => ({ name: player.name, color: player.color, bankrupt: player.bankrupt, connected: player.connected })),
+    createdAt: new Date(room.createdAt).toISOString(),
+    startedAt: room.stats?.game?.startedAt || null,
+    endedAt: room.stats?.game?.endedAt || (room.endedAt ? new Date(room.endedAt).toISOString() : null),
+    totalRolls: room.stats?.rolls?.totalRolls || 0,
+    turnsEnded: room.stats?.game?.turnsEnded || 0
+  };
+}
+
+function buildStatsExport(room) {
+  const stats = JSON.parse(JSON.stringify(room.stats || {}));
+  stats.generatedAt = new Date().toISOString();
+  return {
+    ok: true,
+    room: makeStatsRoomSummary(room),
+    stats,
+    currentState: {
+      status: room.status,
+      actionText: room.actionText,
+      currentPlayerIndex: room.currentPlayerIndex,
+      vacationPot: room.vacationPot,
+      gameOver: room.gameOver
+    },
+    tiles: room.tiles.map((tile, index) => ({
+      index,
+      name: tile.name,
+      type: tile.type,
+      group: tile.group || null,
+      owner: Number.isInteger(tile.owner) ? room.players[tile.owner]?.name || null : null,
+      houses: tile.houses || 0,
+      price: tile.price || null,
+      rent: tile.rent || null
+    })),
+    players: room.players.map(player => ({
+      id: player.id,
+      name: player.name,
+      color: player.color,
+      money: player.money,
+      position: player.position,
+      bankrupt: player.bankrupt,
+      inDebt: player.inDebt,
+      inJail: player.inJail,
+      connected: player.connected
+    })),
+    log: room.logs
+  };
+}
 
 
 function clearTurnTimer(room) {
@@ -783,6 +1197,7 @@ function performRollDice(room, playerIndex, automatic) {
   clearTurnTimer(room);
   const startState = publicRoomState(room);
   const [d1, d2] = drawDice(room);
+  recordRoll(room, playerIndex, d1, d2, { automatic });
   const total = d1 + d2;
   const paths = { [playerIndex]: [] };
   const isDouble = d1 === d2;
@@ -799,6 +1214,7 @@ function performRollDice(room, playerIndex, automatic) {
   if (isDouble && room.doubleRollCount >= 3) {
     player.inJail = true;
     room.doubleRollCount = 0;
+    recordJail(room, playerIndex, 'threeDoubles');
     directMove(room, player, 10, paths, false);
     room.actionText = `${automatic ? '⏱ ' : ''}${player.name} je bacio treće duple (${d1}+${d2}) i ide direktno u pritvor.`;
     addLog(room, room.actionText);
@@ -831,6 +1247,7 @@ function resolveJailPayment(room, playerIndex, automatic) {
   clearTurnTimer(room);
   player.money -= JAIL_FEE;
   player.inJail = false;
+  recordJail(room, playerIndex, 'paidToLeave', JAIL_FEE);
   room.diceRolled = true;
   room.canRollAgain = false;
   room.doubleRollCount = 0;
@@ -848,6 +1265,7 @@ function performJailRoll(room, playerIndex, automatic) {
   clearTurnTimer(room);
   const startState = publicRoomState(room);
   const [d1, d2] = drawDice(room);
+  recordRoll(room, playerIndex, d1, d2, { jail: true, automatic });
   const paths = { [playerIndex]: [] };
   room.diceRolled = true;
   room.canRollAgain = false;
@@ -858,11 +1276,13 @@ function performJailRoll(room, playerIndex, automatic) {
 
   if (d1 === d2) {
     player.inJail = false;
+    recordJail(room, playerIndex, 'rollSuccess');
     room.actionText = `${automatic ? '⏱ ' : ''}${player.name} je bacio duple ${d1}+${d2} i izašao iz pritvora. To je ceo potez za ovaj krug.`;
     addLog(room, room.actionText);
   } else {
     player.money -= JAIL_FEE;
     player.inJail = false;
+    recordJail(room, playerIndex, 'rollFailPaid', JAIL_FEE);
     room.actionText = `${automatic ? '⏱ ' : ''}${player.name} nije bacio duple (${d1}+${d2}) i plaća ${money(JAIL_FEE)}. To je ceo potez za ovaj krug.`;
     addLog(room, room.actionText);
     checkDebt(room, player);
@@ -887,6 +1307,7 @@ function endTurnForRoom(room) {
     emitRoom(room);
     return;
   }
+  recordTurnEnded(room, room.currentPlayerIndex);
   room.diceRolled = false;
   room.canRollAgain = false;
   room.doubleRollCount = 0;
@@ -920,15 +1341,18 @@ function movePlayer(room, player, steps, paths) {
     if (newPosition < 0) newPosition = room.tiles.length - 1;
     player.position = newPosition;
     paths[playerIndex].push(newPosition);
+    recordTilePassed(room, newPosition, playerIndex);
     if (direction > 0 && newPosition === 0) {
       const landedOnStart = i === totalSteps - 1;
       const bonus = landedOnStart ? LAND_START_BONUS : PASS_START_BONUS;
       player.money += bonus;
+      recordStartBonus(room, playerIndex, bonus, landedOnStart);
       addLog(room, `${player.name} je ${landedOnStart ? 'stao na' : 'prošao'} START i dobio ${money(bonus)}.`);
       checkDebt(room, player);
     }
   }
   room.landedTileIndex = player.position;
+  recordTileLanding(room, player.position, playerIndex);
   addLog(room, `${player.name} je stao na ${room.tiles[player.position].name}.`);
 }
 
@@ -938,8 +1362,10 @@ function directMove(room, player, targetIndex, paths, collectStartBonus) {
   player.position = targetIndex;
   room.landedTileIndex = targetIndex;
   paths[playerIndex].push(targetIndex);
+  recordTileLanding(room, targetIndex, playerIndex);
   if (collectStartBonus) {
     player.money += LAND_START_BONUS;
+    recordStartBonus(room, playerIndex, LAND_START_BONUS, true);
     addLog(room, `${player.name} je dobio ${money(LAND_START_BONUS)} na STARTU.`);
     checkDebt(room, player);
   }
@@ -959,6 +1385,7 @@ function handleTile(room, player, paths) {
     if (pot > 0) {
       room.vacationPot = 0;
       player.money += pot;
+      recordOdmorPayout(room, room.players.indexOf(player), player.position, pot);
       room.actionText = `${player.name} je stao na Odmor i pokupio ${money(pot)}.`;
       addLog(room, room.actionText);
       checkDebt(room, player);
@@ -983,6 +1410,7 @@ function handleTile(room, player, paths) {
 
   if (tile.type === 'goToJail') {
     player.inJail = true;
+    recordJail(room, room.players.indexOf(player), 'sentToJail');
     room.actionText = `${player.name} ide u pritvor. Sledeći potez mora da plati ${money(JAIL_FEE)} ili baci duple.`;
     addLog(room, room.actionText);
     directMove(room, player, 10, paths, false);
@@ -1025,6 +1453,7 @@ function handleTile(room, player, paths) {
     }
 
     const rent = getTileRent(room, tile, room.lastRollTotal);
+    recordRent(room, room.players.indexOf(player), tile.owner, player.position, rent);
     room.actionText = `${player.name} plaća ${money(rent)} rente igraču ${owner.name} za ${tile.name}.`;
     payPlayer(room, player, owner, rent, `renta za ${tile.name}`);
   }
@@ -1037,9 +1466,12 @@ function drawEvent(room, player, paths) {
     addLog(room, 'Špil karata je ponovo promešan.');
   }
   const card = room.eventDeck[room.eventPointer++];
+  const playerIndex = room.players.indexOf(player);
+  const beforeMoney = player.money;
   room.actionText = `Karta: ${card.text}`;
   addLog(room, room.actionText);
   card.effect(room, player, paths);
+  recordCard(room, playerIndex, card.text, player.money - beforeMoney);
 }
 
 function isPurchasableTile(tile) {
@@ -1048,6 +1480,7 @@ function isPurchasableTile(tile) {
 
 function payBank(room, player, amount, reason) {
   player.money -= amount;
+  recordBankPayment(room, room.players.indexOf(player), amount, reason);
   addLog(room, `${player.name} je platio ${money(amount)} banci: ${reason}.`);
   checkDebt(room, player);
 }
@@ -1056,6 +1489,7 @@ function payTax(room, player, amount, reason) {
   const safeAmount = Math.max(0, Math.floor(Number(amount) || 0));
   player.money -= safeAmount;
   room.vacationPot = (Number(room.vacationPot) || 0) + safeAmount;
+  recordTax(room, room.players.indexOf(player), player.position, safeAmount, reason);
   addLog(room, `${player.name} je platio ${money(safeAmount)} za ${reason}. Odmor fond sada ima ${money(room.vacationPot)}.`);
   checkDebt(room, player);
 }
@@ -1123,6 +1557,7 @@ function kickPlayer(room, playerIndex) {
   player.connected = false;
   player.inDebt = false;
   player.inJail = false;
+  recordBankruptcy(room, playerIndex, 'kick');
   addLog(room, `🚪 ${player.name} je izbačen iz igre. Sva njegova polja se vraćaju banci.`);
   room.tiles.forEach(tile => {
     if (isPurchasableTile(tile) && tile.owner === playerIndex) {
@@ -1146,6 +1581,7 @@ function kickPlayer(room, playerIndex) {
     room.gameOver = true;
     room.status = 'ended';
     room.endedAt = Date.now();
+    finishStats(room, activePlayers[0]);
     room.actionText = `🏆 ${activePlayers[0].name} je pobedio!`;
     addLog(room, room.actionText);
     return;
@@ -1168,6 +1604,7 @@ function declareBankruptcy(room, playerIndex) {
   player.bankrupt = true;
   player.inDebt = false;
   player.inJail = false;
+  recordBankruptcy(room, playerIndex, 'declared');
   addLog(room, `💀 ${player.name} je proglasio bankrot. Sva polja se vraćaju banci.`);
   room.tiles.forEach(tile => {
     if (isPurchasableTile(tile) && tile.owner === playerIndex) {
@@ -1185,6 +1622,7 @@ function declareBankruptcy(room, playerIndex) {
     room.gameOver = true;
     room.status = 'ended';
     room.endedAt = Date.now();
+    finishStats(room, activePlayers[0]);
     room.actionText = `🏆 ${activePlayers[0].name} je pobedio!`;
     addLog(room, room.actionText);
     return;
@@ -1320,6 +1758,7 @@ function drawDice(room) {
     const replacement = room.diceDeck.shift();
     room.diceDeck.push(dice);
     dice = replacement;
+    recordDiceRedraw(room);
   }
 
   const finalTotal = dice[0] + dice[1];

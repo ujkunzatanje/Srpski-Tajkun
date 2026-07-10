@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="sr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Srpski Tajkun Stats</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: radial-gradient(circle at 50% 0%, rgba(124,77,255,0.22), transparent 32%), #110a19;
+      color: #f7f2ff;
+      font-family: Arial, Helvetica, sans-serif;
+      padding: 18px;
+    }
+    .wrap { width: min(1100px, 100%); margin: 0 auto; }
+    .top-card, .panel {
+      background: #1d122c;
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 18px;
+      box-shadow: 0 22px 70px rgba(0,0,0,0.32);
+    }
+    .top-card { padding: 22px; margin-bottom: 16px; }
+    h1 { margin: 0 0 6px; font-size: clamp(28px, 4vw, 42px); }
+    p { color: #c9bce8; line-height: 1.45; }
+    .controls { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; margin-top: 16px; }
+    input, button {
+      font: inherit;
+      border: 0;
+      border-radius: 12px;
+      padding: 12px 14px;
+    }
+    input { background: #130d20; color: white; border: 1px solid rgba(255,255,255,0.10); outline: none; }
+    button { cursor: pointer; color: white; font-weight: 900; background: #34234f; }
+    .primary { background: linear-gradient(135deg, #9657ff, #6236df); }
+    .download { background: linear-gradient(135deg, #27ca78, #16884f); }
+    .grid { display: grid; grid-template-columns: 340px 1fr; gap: 16px; align-items: start; }
+    .panel { padding: 16px; min-width: 0; }
+    h2 { margin: 0 0 12px; color: #dfd6ff; }
+    .room-list { display: grid; gap: 8px; }
+    .room-btn {
+      display: grid;
+      gap: 4px;
+      width: 100%;
+      text-align: left;
+      background: #26183b;
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+    .room-btn.active { outline: 2px solid #7c4dff; }
+    .room-main { display: flex; justify-content: space-between; gap: 8px; font-weight: 900; }
+    .room-sub { color: #bcaee1; font-size: 12px; }
+    .empty, .error { padding: 12px; border-radius: 12px; background: #211633; color: #c9bce8; }
+    .error { background: #3a1730; color: #ffd1da; }
+    .cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+    .stat-card { background: #26183b; border-radius: 14px; padding: 12px; }
+    .stat-card span { display: block; color: #bcaee1; font-size: 12px; }
+    .stat-card strong { display: block; margin-top: 5px; font-size: 22px; color: #fff0b8; }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; }
+    th, td { padding: 8px 7px; border-bottom: 1px solid rgba(255,255,255,0.08); text-align: left; }
+    th { color: #fff0b8; font-size: 12px; }
+    td { color: #efeaff; }
+    .two-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .small-note { font-size: 12px; color: #9e8fc1; }
+    @media (max-width: 850px) {
+      .grid, .two-cols, .controls { grid-template-columns: 1fr; }
+      .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="top-card">
+      <h1>Srpski Tajkun Stats</h1>
+      <p>Ova stranica nije deo igre. Koristi admin ključ iz URL-a, prikazuje aktivne sobe i omogućava skidanje JSON statistike dok soba još postoji.</p>
+      <div class="controls">
+        <input id="roomInput" placeholder="Kod sobe, npr. JVW6R" maxlength="8" />
+        <button id="loadBtn" class="primary">Učitaj sobu</button>
+        <button id="downloadBtn" class="download" disabled>Download JSON</button>
+      </div>
+      <p class="small-note">Primer: /stats?key=kuntaj1312</p>
+    </section>
+
+    <div class="grid">
+      <section class="panel">
+        <h2>Sobe u memoriji</h2>
+        <div id="roomList" class="room-list"><div class="empty">Učitavam...</div></div>
+      </section>
+
+      <section class="panel">
+        <h2>Pregled</h2>
+        <div id="summary"><div class="empty">Izaberi sobu da vidiš statistiku.</div></div>
+      </section>
+    </div>
+  </div>
+
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const key = params.get('key') || '';
+    const roomInput = document.getElementById('roomInput');
+    const loadBtn = document.getElementById('loadBtn');
+    const downloadBtn = document.getElementById('downloadBtn');
+    const roomList = document.getElementById('roomList');
+    const summary = document.getElementById('summary');
+    let selectedRoom = null;
+    let selectedStats = null;
+
+    loadBtn.addEventListener('click', () => loadRoom(roomInput.value));
+    downloadBtn.addEventListener('click', downloadJson);
+    roomInput.addEventListener('keydown', event => {
+      if (event.key === 'Enter') loadRoom(roomInput.value);
+    });
+
+    init();
+
+    async function init() {
+      if (!key) {
+        roomList.innerHTML = '<div class="error">Nedostaje key u URL-u. Otvori /stats?key=...</div>';
+        return;
+      }
+      await loadRoomList();
+    }
+
+    async function loadRoomList() {
+      try {
+        const data = await fetchJson(`/api/stats?key=${encodeURIComponent(key)}`);
+        if (!data.rooms || !data.rooms.length) {
+          roomList.innerHTML = '<div class="empty">Trenutno nema soba u memoriji.</div>';
+          return;
+        }
+        roomList.innerHTML = data.rooms.map(room => `
+          <button class="room-btn" data-room="${escapeHtml(room.code)}">
+            <span class="room-main"><span>${escapeHtml(room.code)}</span><span>${escapeHtml(room.status)}</span></span>
+            <span class="room-sub">Igrači: ${room.playerCount} · Bacanja: ${room.totalRolls} · Potezi: ${room.turnsEnded}</span>
+            <span class="room-sub">${room.players.map(p => escapeHtml(p.name)).join(', ')}</span>
+          </button>
+        `).join('');
+        document.querySelectorAll('.room-btn').forEach(btn => {
+          btn.addEventListener('click', () => loadRoom(btn.dataset.room));
+        });
+      } catch (error) {
+        roomList.innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
+      }
+    }
+
+    async function loadRoom(code) {
+      const room = cleanRoomCode(code);
+      if (!room) return;
+      try {
+        selectedRoom = room;
+        roomInput.value = room;
+        selectedStats = await fetchJson(`/api/stats?key=${encodeURIComponent(key)}&room=${encodeURIComponent(room)}`);
+        downloadBtn.disabled = false;
+        renderSummary(selectedStats);
+        document.querySelectorAll('.room-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.room === room));
+      } catch (error) {
+        selectedStats = null;
+        downloadBtn.disabled = true;
+        summary.innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
+      }
+    }
+
+    function renderSummary(data) {
+      const stats = data.stats || {};
+      const rolls = stats.rolls || {};
+      const economy = stats.economy || {};
+      const tiles = Object.values(stats.tiles || {});
+      const topLanded = [...tiles].sort((a, b) => b.landed - a.landed).slice(0, 10);
+      const topRent = [...tiles].sort((a, b) => b.rentPaid - a.rentPaid).slice(0, 10);
+      const totals = rolls.totals || {};
+      const combinations = rolls.combinations || {};
+
+      summary.innerHTML = `
+        <div class="cards">
+          <div class="stat-card"><span>Soba</span><strong>${escapeHtml(data.room.code)}</strong></div>
+          <div class="stat-card"><span>Status</span><strong>${escapeHtml(data.room.status)}</strong></div>
+          <div class="stat-card"><span>Bacanja</span><strong>${rolls.totalRolls || 0}</strong></div>
+          <div class="stat-card"><span>Prosek</span><strong>${rolls.averageTotal || 0}</strong></div>
+          <div class="stat-card"><span>Duple</span><strong>${rolls.doubles || 0}</strong></div>
+          <div class="stat-card"><span>Potezi</span><strong>${stats.game?.turnsEnded || 0}</strong></div>
+          <div class="stat-card"><span>Renta</span><strong>€${economy.rentTotal || 0}</strong></div>
+          <div class="stat-card"><span>Porez</span><strong>€${economy.taxTotal || 0}</strong></div>
+        </div>
+
+        <div class="two-cols">
+          <div>
+            <h2>Najposećenija polja</h2>
+            ${makeTileTable(topLanded, 'landed')}
+          </div>
+          <div>
+            <h2>Najviše rente</h2>
+            ${makeTileTable(topRent, 'rentPaid')}
+          </div>
+        </div>
+
+        <div class="two-cols">
+          <div>
+            <h2>Zbir kockica</h2>
+            ${makeKeyTable(totals, 'Zbir', 'Broj')}
+          </div>
+          <div>
+            <h2>Kombinacije</h2>
+            ${makeKeyTable(combinations, 'Kombinacija', 'Broj')}
+          </div>
+        </div>
+      `;
+    }
+
+    function makeTileTable(rows, metric) {
+      if (!rows.length) return '<div class="empty">Nema podataka.</div>';
+      return `<table><thead><tr><th>Polje</th><th>Tip</th><th>${metric}</th></tr></thead><tbody>${rows.map(row => `
+        <tr><td>${row.index}. ${escapeHtml(row.name)}</td><td>${escapeHtml(row.type)}</td><td>${row[metric] || 0}</td></tr>
+      `).join('')}</tbody></table>`;
+    }
+
+    function makeKeyTable(obj, first, second) {
+      const rows = Object.entries(obj || {});
+      if (!rows.length) return '<div class="empty">Nema podataka.</div>';
+      return `<table><thead><tr><th>${first}</th><th>${second}</th></tr></thead><tbody>${rows.map(([key, value]) => `
+        <tr><td>${escapeHtml(key)}</td><td>${value}</td></tr>
+      `).join('')}</tbody></table>`;
+    }
+
+    async function fetchJson(url) {
+      const response = await fetch(url);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || data.ok === false) throw new Error(data.error || 'Greška pri učitavanju stats podataka.');
+      return data;
+    }
+
+    function downloadJson() {
+      if (!selectedStats || !selectedRoom) return;
+      const blob = new Blob([JSON.stringify(selectedStats, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `srpski-tajkun-${selectedRoom}-stats.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    function cleanRoomCode(code) {
+      return String(code || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;');
+    }
+  </script>
+</body>
+</html>
