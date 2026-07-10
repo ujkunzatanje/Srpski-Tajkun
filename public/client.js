@@ -170,7 +170,14 @@ function connectSocket() {
     }
   });
 
-  socket.on("room:error", message => showError(message));
+  socket.on("room:error", message => {
+    showError(message);
+    const text = String(message || "");
+    if (text.includes("Prethodna soba") || text.includes("staro mesto") || text.includes("bankrotiralo")) {
+      localStorage.removeItem("serbiaPropertyOnlineSession");
+      if (lastRoomBox) lastRoomBox.classList.add("hidden");
+    }
+  });
 
   socket.on("room:kicked", message => {
     showError(message || "Izbačen si iz sobe.", 3500);
@@ -229,7 +236,9 @@ function reconnectLastRoom() {
 }
 
 function leaveRoom() {
-  localStorage.removeItem("serbiaPropertyOnlineSession");
+  // Keep the saved session so the player can return to the same seat
+  // while the room is still active. The server will mark the player
+  // as disconnected when this page closes/reloads.
   window.location.href = window.location.pathname;
 }
 
