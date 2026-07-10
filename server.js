@@ -90,6 +90,22 @@ function buildingCostForPrice(price) {
   return 200;
 }
 
+function getBuildingBuildCost(tile) {
+  const level = Math.min(5, Math.max(0, Number(tile?.houses) || 0));
+  const baseCost = Math.max(0, Math.floor(Number(tile?.houseCost) || 0));
+  if (level >= 5) return 0;
+  if (level === 4) return baseCost + 125;
+  return baseCost + level * 25;
+}
+
+function getBuildingSellRefund(tile) {
+  const level = Math.min(5, Math.max(0, Number(tile?.houses) || 0));
+  if (level <= 0) return 0;
+  const baseCost = Math.max(0, Math.floor(Number(tile?.houseCost) || 0));
+  const originalCost = level === 5 ? baseCost + 125 : baseCost + (level - 1) * 25;
+  return Math.floor(originalCost / 2);
+}
+
 function makeProperty(city) {
   const rentLevels = rentTableByPrice[city.price] || [city.price * 0.1, city.price * 0.5, city.price * 1.5, city.price * 4, city.price * 5, city.price * 6].map(Math.round);
   return {
@@ -99,7 +115,7 @@ function makeProperty(city) {
     rent: rentLevels[0],
     rentLevels,
     houseCost: buildingCostForPrice(city.price),
-    hotelCost: buildingCostForPrice(city.price),
+    hotelCost: buildingCostForPrice(city.price) + 125,
     houses: 0,
     group: city.group,
     color: city.color,
@@ -594,13 +610,13 @@ io.on('connection', socket => {
     if (!validation.ok) return emitError(socket, validation.reason);
 
     if (direction > 0) {
-      const cost = tile.houses === 4 ? tile.hotelCost : tile.houseCost;
+      const cost = getBuildingBuildCost(tile);
       player.money -= cost;
       tile.houses += 1;
       const buildingName = tile.houses === 5 ? 'hotel' : `kuću ${tile.houses}`;
       addLog(room, `${player.name} je izgradio ${buildingName} na ${tile.name} za ${money(cost)}.`);
     } else {
-      const refund = Math.floor((tile.houses === 5 ? tile.hotelCost : tile.houseCost) / 2);
+      const refund = getBuildingSellRefund(tile);
       const removedName = tile.houses === 5 ? 'hotel' : 'kuću';
       tile.houses -= 1;
       player.money += refund;
@@ -968,6 +984,12 @@ function handleTile(room, player, paths) {
       return;
     }
 
+    if (owner.inJail) {
+      room.actionText = `${player.name} je stao na ${tile.name}, ali ${owner.name} je u pritvoru i ne naplaćuje rentu.`;
+      addLog(room, room.actionText);
+      return;
+    }
+
     const rent = getTileRent(room, tile, room.lastRollTotal);
     room.actionText = `${player.name} plaća ${money(rent)} rente igraču ${owner.name} za ${tile.name}.`;
     payPlayer(room, player, owner, rent, `renta za ${tile.name}`);
@@ -1157,6 +1179,8 @@ function validateBuildingAction(room, playerIndex, tileIndex, direction) {
   const player = room.players[playerIndex];
   const tile = room.tiles[tileIndex];
   if (!player || player.bankrupt) return { ok: false, reason: 'Bankrotirao si.' };
+  if (room.status !== 'playing' || room.gameOver) return { ok: false, reason: 'Igra nije aktivna.' };
+  if (playerIndex !== room.currentPlayerIndex) return { ok: false, reason: 'Možeš da gradiš samo tokom svog poteza.' };
   if (!tile || tile.type !== 'property') return { ok: false, reason: 'Samo gradovi mogu da imaju objekte.' };
   if (tile.owner !== playerIndex) return { ok: false, reason: 'Ne poseduješ ovo polje.' };
   if (!ownsFullGroup(room, playerIndex, tile.group)) return { ok: false, reason: 'Moraš da poseduješ ceo set pre gradnje.' };
@@ -1166,7 +1190,7 @@ function validateBuildingAction(room, playerIndex, tileIndex, direction) {
   if (direction > 0) {
     if (player.money <= 0) return { ok: false, reason: 'Prvo reši dug.' };
     if (tile.houses >= 5) return { ok: false, reason: 'Ovo polje već ima hotel.' };
-    const cost = tile.houses === 4 ? tile.hotelCost : tile.houseCost;
+    const cost = getBuildingBuildCost(tile);
     if (player.money < cost) return { ok: false, reason: 'Nema dovoljno novca za gradnju.' };
   } else {
     if (tile.houses <= 0) return { ok: false, reason: 'Nema objekata za prodaju na ovom polju.' };

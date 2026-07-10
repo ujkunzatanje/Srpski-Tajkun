@@ -614,7 +614,8 @@ function renderBoard() {
 function getBuildingIconHtml(houses) {
   const level = Math.min(5, Math.max(0, Number(houses) || 0));
   if (level === 5) return `<span class="hotel-icon">🏨</span>`;
-  return `<span class="house-stack">${Array.from({ length: level }).map(() => `<span>🏠</span>`).join("")}</span>`;
+  if (level <= 0) return "";
+  return `<span class="single-building-icon">🏠</span>${level > 1 ? `<span class="building-count">x${level}</span>` : ""}`;
 }
 
 function renderAvatars() {
@@ -669,14 +670,18 @@ function renderPlayers() {
     const debtMessage = !player.bankrupt && player.money <= 0
       ? (player.id === myPlayerId ? `<div class="debt-warning">Moraš iznad ${money(0)} trgovinom ili proglasi bankrot.</div>` : `<div class="debt-warning">Čeka se da ovaj igrač trguje ili proglasi bankrot.</div>`)
       : "";
-    const debtTools = `${debtMessage}${canDeclareSelfBankruptcy ? `<button class="bankrupt-button" onclick="declareBankruptcy()">🏳 Proglasi bankrot</button>` : ""}${canHostKick ? `<button class="kick-button full" onclick="kickPlayer('${player.id}', '${escapeJsString(player.name)}')">Izbaci igrača</button>` : ""}`;
+    const smallKickButton = canHostKick ? `<button class="kick-button player-kick" onclick="kickPlayer('${player.id}', '${escapeJsString(player.name)}')">Izbaci</button>` : "";
+    const debtTools = `${debtMessage}${canDeclareSelfBankruptcy ? `<button class="bankrupt-button" onclick="declareBankruptcy()">🏳 Proglasi bankrot</button>` : ""}`;
 
     return `
       <div class="player-card${currentClass}${bankruptClass}${debtClass}${disconnectedClass}${mineClass}">
         <div class="player-name-row">
-          <div class="player-name">
-            <span class="player-dot" style="--player-color:${player.color}"></span>
-            ${safeText(player.name)} ${player.id === myPlayerId ? `<span class="you-pill">Ti</span>` : ""}
+          <div class="player-name-block">
+            <div class="player-name">
+              <span class="player-dot" style="--player-color:${player.color}"></span>
+              ${safeText(player.name)} ${player.id === myPlayerId ? `<span class="you-pill">Ti</span>` : ""}
+            </div>
+            ${smallKickButton}
           </div>
           <span class="badge">${status}</span>
         </div>
@@ -1100,15 +1105,33 @@ function getBuildingLabel(houses) {
   return `${level} kuć${level === 1 ? "a" : "e"}`;
 }
 
+function getBuildingBuildCost(tile) {
+  const level = Math.min(5, Math.max(0, Number(tile?.houses) || 0));
+  const baseCost = Math.max(0, Math.floor(Number(tile?.houseCost) || 0));
+  if (level >= 5) return 0;
+  if (level === 4) return baseCost + 125;
+  return baseCost + level * 25;
+}
+
+function getBuildingSellRefund(tile) {
+  const level = Math.min(5, Math.max(0, Number(tile?.houses) || 0));
+  if (level <= 0) return 0;
+  const baseCost = Math.max(0, Math.floor(Number(tile?.houseCost) || 0));
+  const originalCost = level === 5 ? baseCost + 125 : baseCost + (level - 1) * 25;
+  return Math.floor(originalCost / 2);
+}
+
 function canBuildClient(tile, ownerIndex) {
   if (!tile || tile.type !== "property") return { ok: false, reason: "Samo gradovi mogu da imaju objekte." };
   const player = players[ownerIndex];
   if (!player || player.bankrupt) return { ok: false, reason: "Vlasnik je bankrotirao." };
+  if (roomStatus !== "playing" || gameOver) return { ok: false, reason: "Igra nije aktivna." };
+  if (ownerIndex !== currentPlayerIndex) return { ok: false, reason: "Možeš da gradiš samo tokom svog poteza." };
   if (tile.owner !== ownerIndex) return { ok: false, reason: "Ne poseduješ ovo polje." };
   if (!ownsFullGroup(ownerIndex, tile.group)) return { ok: false, reason: "Prvo moraš da poseduješ ceo set." };
   if (player.money <= 0) return { ok: false, reason: "Prvo reši dug." };
   if ((tile.houses || 0) >= 5) return { ok: false, reason: "Hotel je već izgrađen." };
-  const cost = (tile.houses || 0) === 4 ? tile.hotelCost : tile.houseCost;
+  const cost = getBuildingBuildCost(tile);
   if (player.money < cost) return { ok: false, reason: "Nema dovoljno novca." };
   return { ok: true, reason: "OK" };
 }
@@ -1180,8 +1203,8 @@ function getTileInfoHtml(tile, index) {
     const hasFullSet = ownerIndex !== null && ownsFullGroup(ownerIndex, tile.group);
     const currentLevel = Math.min(5, Math.max(0, Number(tile.houses) || 0));
     const activeRent = tile.rentLevels[currentLevel] || tile.rentLevels[0];
-    const nextCost = currentLevel === 4 ? tile.hotelCost : tile.houseCost;
-    const sellRefund = Math.floor((currentLevel === 5 ? tile.hotelCost : tile.houseCost) / 2);
+    const nextCost = getBuildingBuildCost(tile);
+    const sellRefund = getBuildingSellRefund(tile);
     const buildCheck = isMine ? canBuildClient(tile, myIndex) : { ok: false, reason: "Samo vlasnik može da gradi." };
     const canSellBuilding = isMine && currentLevel > 0;
     const buildingControls = isMine
@@ -1196,7 +1219,7 @@ function getTileInfoHtml(tile, index) {
                 <button onclick="changeBuilding(${index}, -1)" ${canSellBuilding ? "" : "disabled"}>▼ Prodaj ${currentLevel === 5 ? "hotel" : "kuću"}<small>+${money(sellRefund)}</small></button>
                 <button onclick="changeBuilding(${index}, 1)" ${buildCheck.ok ? "" : "disabled"}>▲ ${currentLevel === 4 ? "Izgradi hotel" : "Izgradi kuću"}<small>-${money(nextCost)}</small></button>
               </div>
-              <p class="building-note">Svaki ▲ dodaje jednu kuću. Posle 4 kuće, ▲ gradi hotel.</p>`
+              <p class="building-note">Svaki ▲ dodaje jednu kuću. Posle 4 kuće, ▲ gradi hotel.${buildCheck.ok ? "" : ` ${safeText(buildCheck.reason)}`}</p>`
             : `<p class="building-note blocked">Moraš da poseduješ ceo ${safeText(tile.group)} set pre gradnje.</p>`}
         </div>`
       : "";
