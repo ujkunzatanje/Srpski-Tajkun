@@ -2153,3 +2153,120 @@ button:disabled {
     font-size: 14px;
   }
 }
+
+
+/* Version 19: trade conditions */
+.trade-conditions {
+  margin-top: 14px;
+  border-radius: 14px;
+  background: #211633;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  overflow: hidden;
+}
+
+.trade-conditions summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 11px 14px;
+  color: #fff0b8;
+  font-weight: 1000;
+  text-align: center;
+  background: rgba(124, 77, 255, 0.13);
+}
+
+.trade-conditions summary::-webkit-details-marker {
+  display: none;
+}
+
+.trade-conditions summary::before {
+  content: "⚙ ";
+}
+
+.trade-conditions-body {
+  display: grid;
+  gap: 11px;
+  padding: 13px;
+}
+
+.trade-condition-help {
+  margin: 0;
+  color: #cfc3ec;
+  font-size: 12px;
+  line-height: 1.35;
+  text-align: center;
+}
+
+.trade-condition-help.strong {
+  color: #fff0b8;
+}
+
+.trade-condition-row {
+  display: grid;
+  gap: 6px;
+  color: #eee7ff;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.trade-condition-row select,
+.trade-condition-row input[type="range"] {
+  width: 100%;
+}
+
+.trade-condition-row select {
+  min-height: 40px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: #160d21;
+  color: white;
+  border: 1px solid rgba(255,255,255,0.12);
+  outline: none;
+}
+
+.trade-condition-row input[type="range"] {
+  accent-color: #7c4dff;
+}
+
+.trade-condition-detail {
+  margin-top: 14px;
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 14px;
+  background: #211633;
+  border: 1px solid rgba(255,255,255,0.08);
+}
+
+.trade-condition-detail h4 {
+  margin: 0;
+  color: #fff0b8;
+  text-align: center;
+}
+
+.trade-condition-pill {
+  padding: 9px 10px;
+  border-radius: 11px;
+  background: #160d21;
+  color: #f7f2ff;
+  font-size: 13px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.trade-condition-pill strong {
+  color: #fff0b8;
+}
+
+@media (max-width: 720px) {
+  .trade-conditions-body {
+    padding: 11px;
+  }
+
+  .trade-condition-row {
+    font-size: 12px;
+  }
+
+  .trade-condition-pill {
+    font-size: 12px;
+  }
+}

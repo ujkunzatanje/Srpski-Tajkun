@@ -125,15 +125,22 @@ function getBuildingSellRefund(tile) {
 }
 
 function makeProperty(city) {
-  const rentLevels = rentTableByPrice[city.price] || [city.price * 0.1, city.price * 0.5, city.price * 1.5, city.price * 4, city.price * 5, city.price * 6].map(Math.round);
+  let rentLevels = rentTableByPrice[city.price] || [city.price * 0.1, city.price * 0.5, city.price * 1.5, city.price * 4, city.price * 5, city.price * 6].map(Math.round);
+
+  if (city.name === 'Kikinda') {
+    rentLevels = [4, 20, 60, 190, 330, 460];
+  }
+
+  const houseCost = city.name === 'Sombor' ? 15 : buildingCostForPrice(city.price);
+
   return {
     type: 'property',
     name: city.name,
     price: city.price,
     rent: rentLevels[0],
     rentLevels,
-    houseCost: buildingCostForPrice(city.price),
-    hotelCost: buildingCostForPrice(city.price) + 125,
+    houseCost,
+    hotelCost: houseCost + 125,
     houses: 0,
     group: city.group,
     color: city.color,
@@ -252,6 +259,7 @@ function createRoom(hostPlayer) {
     lastDice: [1, 1],
     trades: [],
     tradeIdCounter: 1,
+    agreements: [],
     createdAt: Date.now(),
     lastActivity: Date.now(),
     endedAt: null,
@@ -326,6 +334,7 @@ function publicRoomState(room) {
     lastRollTotal: room.lastRollTotal,
     lastDice: room.lastDice,
     trades: room.trades,
+    agreements: room.agreements || [],
     vacationPot: room.vacationPot || 0,
     jailFee: JAIL_FEE,
     canRollAgain: Boolean(room.canRollAgain),
@@ -357,6 +366,134 @@ function findPlayer(room, playerId) {
 
 function touchRoom(room) {
   room.lastActivity = Date.now();
+}
+
+
+function cleanTradeConditions(rawConditions, from, to) {
+  const conditions = rawConditions && typeof rawConditions === 'object' ? rawConditions : {};
+  const rentFreeGroup = cleanGroupName(conditions.rentFreeGroup);
+  const revenueShareGroup = cleanGroupName(conditions.revenueShareGroup);
+  const revenueSharePercent = clampPercent(conditions.revenueSharePercent, 0, 40);
+
+  return {
+    rentFreeGroup: rentFreeGroup || null,
+    revenueShareGroup: revenueSharePercent > 0 ? (revenueShareGroup || null) : null,
+    revenueSharePercent
+  };
+}
+
+function cleanGroupName(value) {
+  return String(value || '').trim().slice(0, 40);
+}
+
+function clampPercent(value, min = 0, max = 40) {
+  const number = Math.floor(Number(value) || 0);
+  return Math.max(min, Math.min(max, number));
+}
+
+function getPlayerOwnedGroups(room, playerIndex) {
+  return [...new Set(
+    room.tiles
+      .filter(tile => tile.type === 'property' && tile.owner === playerIndex)
+      .map(tile => tile.group)
+      .filter(Boolean)
+  )];
+}
+
+function canUseTradeConditions(room, trade) {
+  const conditions = trade.conditions || {};
+  const toGroups = getPlayerOwnedGroups(room, trade.to);
+  const validGroups = new Set(toGroups);
+
+  for (const tileIndex of trade.fromTiles || []) {
+    const tile = room.tiles[tileIndex];
+    if (tile?.type === 'property' && tile.group) validGroups.add(tile.group);
+  }
+
+  for (const tileIndex of trade.toTiles || []) {
+    const tile = room.tiles[tileIndex];
+    if (tile?.type === 'property' && tile.group) validGroups.add(tile.group);
+  }
+
+  if (conditions.rentFreeGroup && !validGroups.has(conditions.rentFreeGroup)) {
+    return { ok: false, reason: `${room.players[trade.to]?.name || 'Igrač'} nema taj set u razmeni/uslovu.` };
+  }
+
+  if (conditions.revenueSharePercent > 0 && !conditions.revenueShareGroup) {
+    return { ok: false, reason: 'Izaberi set za procenat rente.' };
+  }
+
+  if (conditions.revenueShareGroup && !validGroups.has(conditions.revenueShareGroup)) {
+    return { ok: false, reason: `${room.players[trade.to]?.name || 'Igrač'} nema taj set u razmeni/uslovu.` };
+  }
+
+  return { ok: true, reason: 'OK' };
+}
+
+function addTradeAgreement(room, trade) {
+  const conditions = trade.conditions || {};
+  const hasRentFree = Boolean(conditions.rentFreeGroup);
+  const hasShare = Boolean(conditions.revenueShareGroup && conditions.revenueSharePercent > 0);
+  if (!hasRentFree && !hasShare) return;
+
+  const agreement = {
+    id: `a_${Date.now().toString(36)}_${room.tradeIdCounter}_${crypto.randomBytes(3).toString('hex')}`,
+    beneficiary: trade.from,
+    grantor: trade.to,
+    rentFreeGroup: conditions.rentFreeGroup || null,
+    revenueShareGroup: conditions.revenueShareGroup || null,
+    revenueSharePercent: clampPercent(conditions.revenueSharePercent, 0, 40),
+    createdAt: Date.now(),
+    sourceTradeId: trade.id
+  };
+
+  room.agreements = Array.isArray(room.agreements) ? room.agreements : [];
+  room.agreements.push(agreement);
+
+  const fromName = room.players[trade.from]?.name || 'Igrač';
+  const toName = room.players[trade.to]?.name || 'Igrač';
+  const parts = [];
+  if (agreement.rentFreeGroup) parts.push(`${fromName} ne plaća rentu na ${agreement.rentFreeGroup} setu igrača ${toName}`);
+  if (agreement.revenueShareGroup && agreement.revenueSharePercent > 0) parts.push(`${toName} plaća ${agreement.revenueSharePercent}% rente sa ${agreement.revenueShareGroup} seta igraču ${fromName}`);
+  addLog(room, `📜 Uslov razmene: ${parts.join(' + ')}.`);
+}
+
+function hasRentFreeAgreement(room, payerIndex, ownerIndex, groupName) {
+  return (room.agreements || []).some(agreement =>
+    agreement.beneficiary === payerIndex &&
+    agreement.grantor === ownerIndex &&
+    agreement.rentFreeGroup === groupName
+  );
+}
+
+function applyRevenueShareAgreements(room, payerIndex, ownerIndex, tile, rentAmount) {
+  if (!tile?.group || rentAmount <= 0) return;
+  const agreements = (room.agreements || []).filter(agreement =>
+    agreement.grantor === ownerIndex &&
+    agreement.revenueShareGroup === tile.group &&
+    Number(agreement.revenueSharePercent) > 0
+  );
+
+  for (const agreement of agreements) {
+    const beneficiary = room.players[agreement.beneficiary];
+    const owner = room.players[ownerIndex];
+    if (!beneficiary || !owner || beneficiary.bankrupt || owner.bankrupt) continue;
+
+    const share = Math.floor(rentAmount * clampPercent(agreement.revenueSharePercent, 0, 40) / 100);
+    if (share <= 0) continue;
+
+    owner.money -= share;
+    beneficiary.money += share;
+    addLog(room, `📜 Uslov: ${owner.name} plaća ${money(share)} (${agreement.revenueSharePercent}%) igraču ${beneficiary.name} od rente za ${tile.name}.`);
+    checkDebt(room, owner);
+    checkDebt(room, beneficiary);
+  }
+}
+
+function removePlayerAgreements(room, playerIndex) {
+  room.agreements = (room.agreements || []).filter(agreement =>
+    agreement.beneficiary !== playerIndex && agreement.grantor !== playerIndex
+  );
 }
 
 function reconnectSeat(socket, room, player, logMessage) {
@@ -579,15 +716,19 @@ io.on('connection', socket => {
       toMoney: clampMoney(payload.toMoney),
       fromTiles: uniqueTileIndexes(payload.fromTiles),
       toTiles: uniqueTileIndexes(payload.toTiles),
+      conditions: cleanTradeConditions(payload.conditions, from, requestedTo),
       status: 'pending',
       kind: originalTrade ? 'counter' : 'offer',
       replyTo: originalTrade ? originalTrade.id : null
     };
-    if (trade.fromMoney <= 0 && trade.toMoney <= 0 && trade.fromTiles.length === 0 && trade.toTiles.length === 0) {
-      return emitError(socket, 'Izaberi novac ili bar jedno polje za razmenu.');
+    const hasConditions = Boolean(trade.conditions.rentFreeGroup || (trade.conditions.revenueShareGroup && trade.conditions.revenueSharePercent > 0));
+    if (trade.fromMoney <= 0 && trade.toMoney <= 0 && trade.fromTiles.length === 0 && trade.toTiles.length === 0 && !hasConditions) {
+      return emitError(socket, 'Izaberi novac, polje ili uslov za razmenu.');
     }
     const validation = canAcceptTrade(room, trade);
     if (!validation.ok) return emitError(socket, validation.reason);
+    const conditionValidation = canUseTradeConditions(room, trade);
+    if (!conditionValidation.ok) return emitError(socket, conditionValidation.reason);
 
     if (originalTrade) {
       originalTrade.status = 'countered';
@@ -613,6 +754,8 @@ io.on('connection', socket => {
     if (trade.to !== playerIndex) return emitError(socket, 'Samo primalac može da prihvati ovu razmenu.');
     const validation = canAcceptTrade(room, trade);
     if (!validation.ok) return emitError(socket, validation.reason);
+    const conditionValidation = canUseTradeConditions(room, trade);
+    if (!conditionValidation.ok) return emitError(socket, conditionValidation.reason);
 
     const from = room.players[trade.from];
     const to = room.players[trade.to];
@@ -620,6 +763,7 @@ io.on('connection', socket => {
     to.money = to.money - trade.toMoney + trade.fromMoney;
     trade.fromTiles.forEach(tileIndex => { room.tiles[tileIndex].owner = trade.to; });
     trade.toTiles.forEach(tileIndex => { room.tiles[tileIndex].owner = trade.from; });
+    addTradeAgreement(room, trade);
     trade.status = 'accepted';
     room.trades = room.trades.filter(item => item.status === 'pending');
     recordTrade(room, 'accepted');
@@ -1103,6 +1247,7 @@ function buildStatsExport(room) {
     ok: true,
     room: makeStatsRoomSummary(room),
     stats,
+    agreements: room.agreements || [],
     currentState: {
       status: room.status,
       actionText: room.actionText,
@@ -1456,10 +1601,18 @@ function handleTile(room, player, paths) {
       return;
     }
 
+    const payerIndex = room.players.indexOf(player);
+    if (tile.type === 'property' && hasRentFreeAgreement(room, payerIndex, tile.owner, tile.group)) {
+      room.actionText = `${player.name} je stao na ${tile.name}, ali po uslovu razmene ne plaća rentu za ${tile.group} set igraču ${owner.name}.`;
+      addLog(room, room.actionText);
+      return;
+    }
+
     const rent = getTileRent(room, tile, room.lastRollTotal);
-    recordRent(room, room.players.indexOf(player), tile.owner, player.position, rent);
+    recordRent(room, payerIndex, tile.owner, player.position, rent);
     room.actionText = `${player.name} plaća ${money(rent)} rente igraču ${owner.name} za ${tile.name}.`;
     payPlayer(room, player, owner, rent, `renta za ${tile.name}`);
+    if (tile.type === 'property') applyRevenueShareAgreements(room, payerIndex, tile.owner, tile, rent);
   }
 }
 
@@ -1573,6 +1726,7 @@ function kickPlayer(room, playerIndex) {
     if (trade.from === playerIndex || trade.to === playerIndex) trade.status = 'cancelled';
   });
   room.trades = room.trades.filter(trade => trade.status === 'pending');
+  removePlayerAgreements(room, playerIndex);
   const kickedSocket = io.sockets.sockets.get(player.socketId);
   if (kickedSocket) {
     kickedSocket.emit('room:kicked', 'Izbačen si iz igre od strane hosta.');
@@ -1620,6 +1774,7 @@ function declareBankruptcy(room, playerIndex) {
     if (trade.from === playerIndex || trade.to === playerIndex) trade.status = 'cancelled';
   });
   room.trades = room.trades.filter(trade => trade.status === 'pending');
+  removePlayerAgreements(room, playerIndex);
   const activePlayers = room.players.filter(item => !item.bankrupt);
   if (activePlayers.length === 1) {
     clearTurnTimer(room);
@@ -1683,7 +1838,11 @@ function ownsFullGroup(room, ownerIndex, groupName) {
 function getTileRent(room, tile, diceTotal) {
   if (tile.type === 'property') {
     const houseLevel = Math.min(5, Math.max(0, tile.houses || 0));
-    return tile.rentLevels[houseLevel] || tile.rent;
+    const baseRent = tile.rentLevels[houseLevel] || tile.rent;
+    if (houseLevel === 0 && Number.isInteger(tile.owner) && ownsFullGroup(room, tile.owner, tile.group)) {
+      return baseRent * 2;
+    }
+    return baseRent;
   }
   if (tile.type === 'transport') {
     const ownedCount = countOwnedTilesByType(room, tile.owner, 'transport');

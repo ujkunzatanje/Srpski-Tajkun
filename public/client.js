@@ -22,6 +22,7 @@ let selectedTileIndex = null;
 let lastRollTotal = 0;
 let lastDice = [1, 1];
 let trades = [];
+let agreements = [];
 let roomStatus = "setup";
 let hostPlayerId = null;
 let activeTradeDraft = null;
@@ -395,6 +396,7 @@ function applyState(state, options = {}) {
   lastRollTotal = state.lastRollTotal || 0;
   lastDice = state.lastDice || [1, 1];
   trades = state.trades || [];
+  agreements = state.agreements || [];
   handleIncomingTradeNotifications(previousTrades, trades);
   vacationPot = Number(state.vacationPot) || 0;
   jailFee = Number(state.jailFee) || 60;
@@ -909,6 +911,7 @@ function openTradeOffer(tradeId) {
         ${makeTradeDetailSide(trade.toMoney, trade.toTiles)}
       </div>
     </div>
+    ${makeTradeConditionsDetail(trade.conditions)}
     <div class="trade-send-row wrap">
       <button class="trade-back-button" onclick="closeTradeModal()">Zatvori</button>
       ${canAccept ? `<button class="trade-accept-button" onclick="acceptTrade(${trade.id})">Prihvati</button>` : ""}
@@ -947,6 +950,7 @@ function negotiateTrade(tradeId) {
     toMoney: me === trade.from ? trade.toMoney : trade.fromMoney,
     fromTiles: me === trade.from ? [...trade.fromTiles] : [...trade.toTiles],
     toTiles: me === trade.from ? [...trade.toTiles] : [...trade.fromTiles],
+    conditions: { ...(trade.conditions || {}) },
     replaceTradeId: trade.id
   };
   renderTradeBuilder("Pregovaraj i pošalji novu ponudu");
@@ -972,6 +976,11 @@ function openTradePlayerPicker() {
     toMoney: 0,
     fromTiles: [],
     toTiles: [],
+    conditions: {
+      rentFreeGroup: "",
+      revenueShareGroup: "",
+      revenueSharePercent: 0
+    },
     replaceTradeId: null
   };
 
@@ -1018,12 +1027,117 @@ function renderTradeBuilder(title = "Napravi razmenu") {
       <div class="trade-swap-icon">↔</div>
       ${makeTradeColumnHtml("to", to, activeTradeDraft.to, toMoneyMax)}
     </div>
+    ${makeTradeConditionsHtml()}
     <div class="trade-send-row">
       <button class="trade-back-button" onclick="${backAction}">Nazad</button>
       <button class="trade-send-button" onclick="sendTradeOffer()">Pošalji razmenu</button>
     </div>
   `;
   updateTradeMoneyLabels();
+}
+
+
+function makeTradeConditionsHtml() {
+  const toIndex = activeTradeDraft?.to;
+  const target = players[toIndex];
+  if (!target) return "";
+
+  activeTradeDraft.conditions = activeTradeDraft.conditions || {
+    rentFreeGroup: "",
+    revenueShareGroup: "",
+    revenueSharePercent: 0
+  };
+
+  const targetGroups = getConditionGroupsForPlayer(toIndex, activeTradeDraft);
+  const hasGroups = targetGroups.length > 0;
+  const hasCondition = Boolean(activeTradeDraft.conditions.rentFreeGroup || activeTradeDraft.conditions.revenueShareGroup || Number(activeTradeDraft.conditions.revenueSharePercent) > 0);
+  const startOpen = hasCondition ? " open" : "";
+
+  return `
+    <details class="trade-conditions"${startOpen}>
+      <summary>Uslovi</summary>
+      <div class="trade-conditions-body">
+        <p class="trade-condition-help">Uslovi važe ako druga strana prihvati razmenu. Koriste se za dogovor oko setova koje druga strana ima ili dobija ovom razmenom.</p>
+
+        ${hasGroups ? `
+          <label class="trade-condition-row">
+            <span>Ne plaćam rentu na ovom setu:</span>
+            <select id="conditionRentFreeGroup">
+              <option value="">Bez ovog uslova</option>
+              ${targetGroups.map(group => `<option value="${safeText(group)}" ${activeTradeDraft.conditions.rentFreeGroup === group ? "selected" : ""}>${safeText(group)}</option>`).join("")}
+            </select>
+          </label>
+
+          <label class="trade-condition-row">
+            <span>Dobijam procenat rente sa ovog seta:</span>
+            <select id="conditionRevenueShareGroup">
+              <option value="">Bez ovog uslova</option>
+              ${targetGroups.map(group => `<option value="${safeText(group)}" ${activeTradeDraft.conditions.revenueShareGroup === group ? "selected" : ""}>${safeText(group)}</option>`).join("")}
+            </select>
+          </label>
+
+          <div class="trade-condition-row">
+            <label for="conditionRevenueSharePercent">Procenat rente: <strong id="conditionRevenueShareLabel">${Number(activeTradeDraft.conditions.revenueSharePercent) || 0}%</strong></label>
+            <input id="conditionRevenueSharePercent" type="range" min="0" max="40" step="1" value="${Number(activeTradeDraft.conditions.revenueSharePercent) || 0}" oninput="updateConditionPercentLabel()" />
+          </div>
+
+          <p class="trade-condition-help strong">Primer: dajem ti polje za set, ali mi ne naplaćuješ rentu na tom setu i daješ mi deo rente koju drugi plate.</p>
+        ` : `
+          <div class="trade-no-property">Druga strana trenutno nema nijedan gradski set u vlasništvu ili u ovoj razmeni, pa nema dostupnih uslova.</div>
+        `}
+      </div>
+    </details>
+  `;
+}
+
+function getConditionGroupsForPlayer(playerIndex, draft) {
+  const groups = new Set();
+
+  tiles.forEach(tile => {
+    if (tile.type === "property" && tile.owner === playerIndex && tile.group) groups.add(tile.group);
+  });
+
+  (draft?.fromTiles || []).forEach(tileIndex => {
+    const tile = tiles[tileIndex];
+    if (tile?.type === "property" && tile.group) groups.add(tile.group);
+  });
+
+  (draft?.toTiles || []).forEach(tileIndex => {
+    const tile = tiles[tileIndex];
+    if (tile?.type === "property" && tile.group) groups.add(tile.group);
+  });
+
+  return [...groups];
+}
+
+function updateConditionPercentLabel() {
+  const input = document.getElementById("conditionRevenueSharePercent");
+  const label = document.getElementById("conditionRevenueShareLabel");
+  if (label && input) label.textContent = `${Number(input.value) || 0}%`;
+}
+
+function readTradeConditionsFromUi() {
+  const rentFreeGroup = document.getElementById("conditionRentFreeGroup")?.value || "";
+  const revenueShareGroup = document.getElementById("conditionRevenueShareGroup")?.value || "";
+  const revenueSharePercent = Number(document.getElementById("conditionRevenueSharePercent")?.value || 0);
+  return {
+    rentFreeGroup,
+    revenueShareGroup,
+    revenueSharePercent
+  };
+}
+
+function makeTradeConditionsDetail(conditions = {}) {
+  const parts = [];
+  if (conditions.rentFreeGroup) {
+    parts.push(`<div class="trade-condition-pill">🚫 Bez rente za pošiljaoca na setu: <strong>${safeText(conditions.rentFreeGroup)}</strong></div>`);
+  }
+  if (conditions.revenueShareGroup && Number(conditions.revenueSharePercent) > 0) {
+    parts.push(`<div class="trade-condition-pill">📈 Pošiljalac dobija <strong>${Number(conditions.revenueSharePercent) || 0}%</strong> rente sa seta: <strong>${safeText(conditions.revenueShareGroup)}</strong></div>`);
+  }
+  return parts.length
+    ? `<div class="trade-condition-detail"><h4>Uslovi</h4>${parts.join("")}</div>`
+    : "";
 }
 
 function makeTradeColumnHtml(side, player, playerIndex, moneyMax) {
@@ -1085,9 +1199,11 @@ function sendTradeOffer() {
   const toMoney = Number(document.getElementById("tradeToMoney")?.value || 0);
   const fromTiles = [...document.querySelectorAll('input[name="tradeFromTile"]:checked')].map(input => Number(input.value));
   const toTiles = [...document.querySelectorAll('input[name="tradeToTile"]:checked')].map(input => Number(input.value));
+  const conditions = readTradeConditionsFromUi();
+  const hasConditions = Boolean(conditions.rentFreeGroup || (conditions.revenueShareGroup && conditions.revenueSharePercent > 0));
 
-  if (fromMoney <= 0 && toMoney <= 0 && fromTiles.length === 0 && toTiles.length === 0) {
-    showError("Izaberi novac ili bar jedno polje za razmenu.");
+  if (fromMoney <= 0 && toMoney <= 0 && fromTiles.length === 0 && toTiles.length === 0 && !hasConditions) {
+    showError("Izaberi novac, polje ili uslov za razmenu.");
     return;
   }
 
@@ -1097,6 +1213,7 @@ function sendTradeOffer() {
     toMoney,
     fromTiles,
     toTiles,
+    conditions,
     replaceTradeId: activeTradeDraft.replaceTradeId || null
   });
   closeTradeModal();
@@ -1287,7 +1404,7 @@ function getTileInfoHtml(tile, index) {
     const isMine = ownerIndex === myIndex;
     const hasFullSet = ownerIndex !== null && ownsFullGroup(ownerIndex, tile.group);
     const currentLevel = Math.min(5, Math.max(0, Number(tile.houses) || 0));
-    const activeRent = tile.rentLevels[currentLevel] || tile.rentLevels[0];
+    const activeRent = currentLevel === 0 && hasFullSet ? (tile.rentLevels[0] * 2) : (tile.rentLevels[currentLevel] || tile.rentLevels[0]);
     const nextCost = getBuildingBuildCost(tile);
     const sellRefund = getBuildingSellRefund(tile);
     const buildCheck = isMine ? canBuildClient(tile, myIndex) : { ok: false, reason: "Samo vlasnik može da gradi." };
@@ -1319,7 +1436,7 @@ function getTileInfoHtml(tile, index) {
 
         <div class="info-table">
           <div class="info-row info-head"><span>kada</span><span>dobijaš</span></div>
-          <div class="info-row ${currentLevel === 0 ? "active-rent-row" : ""}"><span>osnovna renta</span><strong>${money(tile.rentLevels[0])}</strong></div>
+          <div class="info-row ${currentLevel === 0 ? "active-rent-row" : ""}"><span>${hasFullSet ? "osnovna renta x2 set" : "osnovna renta"}</span><strong>${money(hasFullSet ? tile.rentLevels[0] * 2 : tile.rentLevels[0])}</strong></div>
           <div class="info-row ${currentLevel === 1 ? "active-rent-row" : ""}"><span>sa jednom kućom</span><strong>${money(tile.rentLevels[1])}</strong></div>
           <div class="info-row ${currentLevel === 2 ? "active-rent-row" : ""}"><span>sa dve kuće</span><strong>${money(tile.rentLevels[2])}</strong></div>
           <div class="info-row ${currentLevel === 3 ? "active-rent-row" : ""}"><span>sa tri kuće</span><strong>${money(tile.rentLevels[3])}</strong></div>
