@@ -2270,3 +2270,102 @@ button:disabled {
     font-size: 12px;
   }
 }
+
+/* Version 20: clearer trade-condition selection */
+.condition-set-preview {
+  display: grid;
+  gap: 7px;
+  padding: 10px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.055);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  color: #dcd2f3;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.condition-set-preview strong {
+  color: #fff0b8;
+  font-size: 12px;
+}
+
+.condition-set-preview span {
+  display: block;
+  padding: 7px 9px;
+  border-radius: 10px;
+  background: #160d21;
+  color: #f7f2ff;
+  font-weight: 900;
+  overflow-wrap: anywhere;
+}
+
+.trade-condition-checkrow {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  align-items: start;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 12px;
+  background: #160d21;
+  border: 1px solid rgba(255,255,255,0.10);
+  color: #f7f2ff;
+  font-size: 13px;
+  font-weight: 900;
+  line-height: 1.25;
+}
+
+.trade-condition-checkrow input {
+  width: 17px;
+  height: 17px;
+  margin: 1px 0 0;
+  accent-color: #7c4dff;
+}
+
+.condition-checkmark {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: rgba(124, 77, 255, 0.22);
+  color: #fff0b8;
+  font-size: 13px;
+  font-weight: 1000;
+}
+
+.trade-condition-checkrow input:not(:checked) + .condition-checkmark {
+  opacity: 0.35;
+  color: #9e8fc1;
+  background: rgba(255,255,255,0.06);
+}
+
+.trade-condition-row.condition-nested {
+  margin-top: -5px;
+  padding: 0 6px 0 34px;
+}
+
+.trade-condition-row select:disabled,
+.trade-condition-row input[type="range"]:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.trade-condition-row select option {
+  white-space: normal;
+}
+
+@media (max-width: 720px) {
+  .trade-condition-checkrow {
+    grid-template-columns: auto auto 1fr;
+    padding: 9px;
+    font-size: 12px;
+  }
+
+  .trade-condition-row.condition-nested {
+    padding-left: 22px;
+  }
+
+  .condition-set-preview span {
+    font-size: 12px;
+  }
+}

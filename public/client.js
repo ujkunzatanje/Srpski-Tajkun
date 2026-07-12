@@ -950,7 +950,7 @@ function negotiateTrade(tradeId) {
     toMoney: me === trade.from ? trade.toMoney : trade.fromMoney,
     fromTiles: me === trade.from ? [...trade.fromTiles] : [...trade.toTiles],
     toTiles: me === trade.from ? [...trade.toTiles] : [...trade.fromTiles],
-    conditions: { ...(trade.conditions || {}) },
+    conditions: normalizeTradeConditions(trade.conditions || {}),
     replaceTradeId: trade.id
   };
   renderTradeBuilder("Pregovaraj i pošalji novu ponudu");
@@ -976,11 +976,7 @@ function openTradePlayerPicker() {
     toMoney: 0,
     fromTiles: [],
     toTiles: [],
-    conditions: {
-      rentFreeGroup: "",
-      revenueShareGroup: "",
-      revenueSharePercent: 0
-    },
+    conditions: defaultTradeConditions(),
     replaceTradeId: null
   };
 
@@ -1034,6 +1030,7 @@ function renderTradeBuilder(title = "Napravi razmenu") {
     </div>
   `;
   updateTradeMoneyLabels();
+  toggleConditionControls();
 }
 
 
@@ -1042,48 +1039,59 @@ function makeTradeConditionsHtml() {
   const target = players[toIndex];
   if (!target) return "";
 
-  activeTradeDraft.conditions = activeTradeDraft.conditions || {
-    rentFreeGroup: "",
-    revenueShareGroup: "",
-    revenueSharePercent: 0
-  };
-
+  activeTradeDraft.conditions = normalizeTradeConditions(activeTradeDraft.conditions);
   const targetGroups = getConditionGroupsForPlayer(toIndex, activeTradeDraft);
   const hasGroups = targetGroups.length > 0;
-  const hasCondition = Boolean(activeTradeDraft.conditions.rentFreeGroup || activeTradeDraft.conditions.revenueShareGroup || Number(activeTradeDraft.conditions.revenueSharePercent) > 0);
+  const hasCondition = Boolean(
+    (activeTradeDraft.conditions.rentFreeEnabled && activeTradeDraft.conditions.rentFreeGroup) ||
+    (activeTradeDraft.conditions.revenueShareEnabled && activeTradeDraft.conditions.revenueShareGroup && Number(activeTradeDraft.conditions.revenueSharePercent) > 0)
+  );
   const startOpen = hasCondition ? " open" : "";
 
   return `
     <details class="trade-conditions"${startOpen}>
       <summary>Uslovi</summary>
       <div class="trade-conditions-body">
-        <p class="trade-condition-help">Uslovi važe ako druga strana prihvati razmenu. Koriste se za dogovor oko setova koje druga strana ima ili dobija ovom razmenom.</p>
+        <p class="trade-condition-help">Uslovi su opcioni. Važe samo ako druga strana prihvati razmenu i ako će druga strana imati ceo izabrani set posle razmene.</p>
 
         ${hasGroups ? `
-          <label class="trade-condition-row">
-            <span>Ne plaćam rentu na ovom setu:</span>
+          <div class="condition-set-preview">
+            <strong>Dostupni setovi druge strane posle razmene:</strong>
+            ${targetGroups.map(group => `<span>${safeText(getGroupDisplayName(group))}</span>`).join("")}
+          </div>
+
+          <label class="trade-condition-checkrow">
+            <input id="conditionRentFreeEnabled" type="checkbox" ${activeTradeDraft.conditions.rentFreeEnabled ? "checked" : ""} onchange="toggleConditionControls()" />
+            <span class="condition-checkmark">✓</span>
+            <span>Ne plaćam rentu ako stanem na izabrani set.</span>
+          </label>
+          <label class="trade-condition-row condition-nested">
+            <span>Set za uslov bez rente</span>
             <select id="conditionRentFreeGroup">
-              <option value="">Bez ovog uslova</option>
-              ${targetGroups.map(group => `<option value="${safeText(group)}" ${activeTradeDraft.conditions.rentFreeGroup === group ? "selected" : ""}>${safeText(group)}</option>`).join("")}
+              ${targetGroups.map(group => `<option value="${safeText(group)}" ${activeTradeDraft.conditions.rentFreeGroup === group ? "selected" : ""}>${safeText(getGroupDisplayName(group))}</option>`).join("")}
             </select>
           </label>
 
-          <label class="trade-condition-row">
-            <span>Dobijam procenat rente sa ovog seta:</span>
+          <label class="trade-condition-checkrow">
+            <input id="conditionRevenueShareEnabled" type="checkbox" ${activeTradeDraft.conditions.revenueShareEnabled ? "checked" : ""} onchange="toggleConditionControls()" />
+            <span class="condition-checkmark">✓</span>
+            <span>Dobijam procenat rente koju drugi plate na izabrani set.</span>
+          </label>
+          <label class="trade-condition-row condition-nested">
+            <span>Set za procenat rente</span>
             <select id="conditionRevenueShareGroup">
-              <option value="">Bez ovog uslova</option>
-              ${targetGroups.map(group => `<option value="${safeText(group)}" ${activeTradeDraft.conditions.revenueShareGroup === group ? "selected" : ""}>${safeText(group)}</option>`).join("")}
+              ${targetGroups.map(group => `<option value="${safeText(group)}" ${activeTradeDraft.conditions.revenueShareGroup === group ? "selected" : ""}>${safeText(getGroupDisplayName(group))}</option>`).join("")}
             </select>
           </label>
 
-          <div class="trade-condition-row">
+          <div class="trade-condition-row condition-nested">
             <label for="conditionRevenueSharePercent">Procenat rente: <strong id="conditionRevenueShareLabel">${Number(activeTradeDraft.conditions.revenueSharePercent) || 0}%</strong></label>
             <input id="conditionRevenueSharePercent" type="range" min="0" max="40" step="1" value="${Number(activeTradeDraft.conditions.revenueSharePercent) || 0}" oninput="updateConditionPercentLabel()" />
           </div>
 
           <p class="trade-condition-help strong">Primer: dajem ti polje za set, ali mi ne naplaćuješ rentu na tom setu i daješ mi deo rente koju drugi plate.</p>
         ` : `
-          <div class="trade-no-property">Druga strana trenutno nema nijedan gradski set u vlasništvu ili u ovoj razmeni, pa nema dostupnih uslova.</div>
+          <div class="trade-no-property">Druga strana nema nijedan kompletan gradski set i ovom razmenom ne dobija kompletan set, pa nema dostupnih uslova.</div>
         `}
       </div>
     </details>
@@ -1091,23 +1099,74 @@ function makeTradeConditionsHtml() {
 }
 
 function getConditionGroupsForPlayer(playerIndex, draft) {
-  const groups = new Set();
-
-  tiles.forEach(tile => {
-    if (tile.type === "property" && tile.owner === playerIndex && tile.group) groups.add(tile.group);
-  });
+  const ownerAfter = tiles.map(tile => isPurchasableTile(tile) ? tile.owner : null);
 
   (draft?.fromTiles || []).forEach(tileIndex => {
     const tile = tiles[tileIndex];
-    if (tile?.type === "property" && tile.group) groups.add(tile.group);
+    if (tile?.type === "property") ownerAfter[tileIndex] = playerIndex;
   });
 
   (draft?.toTiles || []).forEach(tileIndex => {
     const tile = tiles[tileIndex];
-    if (tile?.type === "property" && tile.group) groups.add(tile.group);
+    if (tile?.type === "property") ownerAfter[tileIndex] = draft.from;
   });
 
-  return [...groups];
+  return getAllPropertyGroups().filter(group => {
+    const groupIndexes = tiles
+      .map((tile, index) => ({ tile, index }))
+      .filter(item => item.tile.type === "property" && item.tile.group === group)
+      .map(item => item.index);
+    return groupIndexes.length > 0 && groupIndexes.every(index => ownerAfter[index] === playerIndex);
+  });
+}
+
+function getGroupDisplayName(groupName) {
+  const names = tiles
+    .filter(tile => tile.type === "property" && tile.group === groupName)
+    .map(tile => tile.name);
+  return names.length ? names.join(" + ") : groupName;
+}
+
+function defaultTradeConditions() {
+  return {
+    rentFreeEnabled: false,
+    rentFreeGroup: "",
+    revenueShareEnabled: false,
+    revenueShareGroup: "",
+    revenueSharePercent: 0
+  };
+}
+
+function normalizeTradeConditions(conditions = {}) {
+  return {
+    rentFreeEnabled: Boolean(conditions.rentFreeEnabled || conditions.rentFreeGroup),
+    rentFreeGroup: conditions.rentFreeGroup || "",
+    revenueShareEnabled: Boolean(conditions.revenueShareEnabled || conditions.revenueShareGroup || Number(conditions.revenueSharePercent) > 0),
+    revenueShareGroup: conditions.revenueShareGroup || "",
+    revenueSharePercent: Number(conditions.revenueSharePercent) || 0
+  };
+}
+
+function refreshTradeBuilderFromUi() {
+  if (!activeTradeDraft || activeTradeDraft.to === null) return;
+  activeTradeDraft.fromMoney = Number(document.getElementById("tradeFromMoney")?.value || 0);
+  activeTradeDraft.toMoney = Number(document.getElementById("tradeToMoney")?.value || 0);
+  activeTradeDraft.fromTiles = [...document.querySelectorAll('input[name="tradeFromTile"]:checked')].map(input => Number(input.value));
+  activeTradeDraft.toTiles = [...document.querySelectorAll('input[name="tradeToTile"]:checked')].map(input => Number(input.value));
+  activeTradeDraft.conditions = readTradeConditionsFromUi();
+  renderTradeBuilder(activeTradeDraft.replaceTradeId ? "Pregovaraj i pošalji novu ponudu" : "Napravi razmenu");
+}
+
+function toggleConditionControls() {
+  const rentCheck = document.getElementById("conditionRentFreeEnabled");
+  const shareCheck = document.getElementById("conditionRevenueShareEnabled");
+  const rentSelect = document.getElementById("conditionRentFreeGroup");
+  const shareSelect = document.getElementById("conditionRevenueShareGroup");
+  const sharePercent = document.getElementById("conditionRevenueSharePercent");
+  if (rentSelect) rentSelect.disabled = !rentCheck?.checked;
+  if (shareSelect) shareSelect.disabled = !shareCheck?.checked;
+  if (sharePercent) sharePercent.disabled = !shareCheck?.checked;
+  updateConditionPercentLabel();
 }
 
 function updateConditionPercentLabel() {
@@ -1117,23 +1176,28 @@ function updateConditionPercentLabel() {
 }
 
 function readTradeConditionsFromUi() {
-  const rentFreeGroup = document.getElementById("conditionRentFreeGroup")?.value || "";
-  const revenueShareGroup = document.getElementById("conditionRevenueShareGroup")?.value || "";
-  const revenueSharePercent = Number(document.getElementById("conditionRevenueSharePercent")?.value || 0);
+  const rentFreeEnabled = Boolean(document.getElementById("conditionRentFreeEnabled")?.checked);
+  const revenueShareEnabled = Boolean(document.getElementById("conditionRevenueShareEnabled")?.checked);
+  const rentFreeGroup = rentFreeEnabled ? (document.getElementById("conditionRentFreeGroup")?.value || "") : "";
+  const revenueShareGroup = revenueShareEnabled ? (document.getElementById("conditionRevenueShareGroup")?.value || "") : "";
+  const revenueSharePercent = revenueShareEnabled ? Number(document.getElementById("conditionRevenueSharePercent")?.value || 0) : 0;
   return {
+    rentFreeEnabled,
     rentFreeGroup,
+    revenueShareEnabled,
     revenueShareGroup,
     revenueSharePercent
   };
 }
 
 function makeTradeConditionsDetail(conditions = {}) {
+  const normalized = normalizeTradeConditions(conditions);
   const parts = [];
-  if (conditions.rentFreeGroup) {
-    parts.push(`<div class="trade-condition-pill">🚫 Bez rente za pošiljaoca na setu: <strong>${safeText(conditions.rentFreeGroup)}</strong></div>`);
+  if (normalized.rentFreeEnabled && normalized.rentFreeGroup) {
+    parts.push(`<div class="trade-condition-pill">🚫 Pošiljalac ne plaća rentu na setu: <strong>${safeText(getGroupDisplayName(normalized.rentFreeGroup))}</strong></div>`);
   }
-  if (conditions.revenueShareGroup && Number(conditions.revenueSharePercent) > 0) {
-    parts.push(`<div class="trade-condition-pill">📈 Pošiljalac dobija <strong>${Number(conditions.revenueSharePercent) || 0}%</strong> rente sa seta: <strong>${safeText(conditions.revenueShareGroup)}</strong></div>`);
+  if (normalized.revenueShareEnabled && normalized.revenueShareGroup && Number(normalized.revenueSharePercent) > 0) {
+    parts.push(`<div class="trade-condition-pill">📈 Pošiljalac dobija <strong>${Number(normalized.revenueSharePercent) || 0}%</strong> rente sa seta: <strong>${safeText(getGroupDisplayName(normalized.revenueShareGroup))}</strong></div>`);
   }
   return parts.length
     ? `<div class="trade-condition-detail"><h4>Uslovi</h4>${parts.join("")}</div>`
@@ -1175,7 +1239,7 @@ function makeTradePropertyRow(tileIndex, checkboxName) {
 
   return `
     <label class="trade-property-row">
-      <input type="checkbox" name="${checkboxName}" value="${tileIndex}" ${checked} />
+      <input type="checkbox" name="${checkboxName}" value="${tileIndex}" ${checked} onchange="refreshTradeBuilderFromUi()" />
       <span><span class="trade-property-color" style="--property-color:${propertyColor}"></span></span>
       <span>${safeText(tile.name)}${safeText(extra)}</span>
       <span class="trade-property-price">${money(tile.price)}</span>
@@ -1200,7 +1264,7 @@ function sendTradeOffer() {
   const fromTiles = [...document.querySelectorAll('input[name="tradeFromTile"]:checked')].map(input => Number(input.value));
   const toTiles = [...document.querySelectorAll('input[name="tradeToTile"]:checked')].map(input => Number(input.value));
   const conditions = readTradeConditionsFromUi();
-  const hasConditions = Boolean(conditions.rentFreeGroup || (conditions.revenueShareGroup && conditions.revenueSharePercent > 0));
+  const hasConditions = Boolean((conditions.rentFreeEnabled && conditions.rentFreeGroup) || (conditions.revenueShareEnabled && conditions.revenueShareGroup && conditions.revenueSharePercent > 0));
 
   if (fromMoney <= 0 && toMoney <= 0 && fromTiles.length === 0 && toTiles.length === 0 && !hasConditions) {
     showError("Izaberi novac, polje ili uslov za razmenu.");

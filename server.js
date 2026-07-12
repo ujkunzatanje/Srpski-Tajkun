@@ -371,13 +371,17 @@ function touchRoom(room) {
 
 function cleanTradeConditions(rawConditions, from, to) {
   const conditions = rawConditions && typeof rawConditions === 'object' ? rawConditions : {};
-  const rentFreeGroup = cleanGroupName(conditions.rentFreeGroup);
-  const revenueShareGroup = cleanGroupName(conditions.revenueShareGroup);
-  const revenueSharePercent = clampPercent(conditions.revenueSharePercent, 0, 40);
+  const rentFreeEnabled = Boolean(conditions.rentFreeEnabled || conditions.rentFreeGroup);
+  const revenueShareEnabled = Boolean(conditions.revenueShareEnabled || conditions.revenueShareGroup || Number(conditions.revenueSharePercent) > 0);
+  const rentFreeGroup = rentFreeEnabled ? cleanGroupName(conditions.rentFreeGroup) : '';
+  const revenueShareGroup = revenueShareEnabled ? cleanGroupName(conditions.revenueShareGroup) : '';
+  const revenueSharePercent = revenueShareEnabled ? clampPercent(conditions.revenueSharePercent, 0, 40) : 0;
 
   return {
+    rentFreeEnabled,
     rentFreeGroup: rentFreeGroup || null,
-    revenueShareGroup: revenueSharePercent > 0 ? (revenueShareGroup || null) : null,
+    revenueShareEnabled,
+    revenueShareGroup: revenueShareGroup || null,
     revenueSharePercent
   };
 }
@@ -392,39 +396,60 @@ function clampPercent(value, min = 0, max = 40) {
 }
 
 function getPlayerOwnedGroups(room, playerIndex) {
-  return [...new Set(
-    room.tiles
-      .filter(tile => tile.type === 'property' && tile.owner === playerIndex)
-      .map(tile => tile.group)
-      .filter(Boolean)
-  )];
+  return getPlayerFullGroups(room, playerIndex);
+}
+
+function getPlayerFullGroups(room, playerIndex) {
+  const groups = [...new Set(room.tiles.filter(tile => tile.type === 'property').map(tile => tile.group).filter(Boolean))];
+  return groups.filter(group => {
+    const groupTiles = room.tiles.filter(tile => tile.type === 'property' && tile.group === group);
+    return groupTiles.length > 0 && groupTiles.every(tile => tile.owner === playerIndex);
+  });
+}
+
+function getGrantorFullGroupsAfterTrade(room, trade) {
+  const ownerAfter = room.tiles.map(tile => isPurchasableTile(tile) ? tile.owner : null);
+
+  for (const tileIndex of trade.fromTiles || []) {
+    if (room.tiles[tileIndex]?.type === 'property') ownerAfter[tileIndex] = trade.to;
+  }
+
+  for (const tileIndex of trade.toTiles || []) {
+    if (room.tiles[tileIndex]?.type === 'property') ownerAfter[tileIndex] = trade.from;
+  }
+
+  const groups = [...new Set(room.tiles.filter(tile => tile.type === 'property').map(tile => tile.group).filter(Boolean))];
+  return groups.filter(group => {
+    const groupIndexes = room.tiles
+      .map((tile, index) => ({ tile, index }))
+      .filter(item => item.tile.type === 'property' && item.tile.group === group)
+      .map(item => item.index);
+    return groupIndexes.length > 0 && groupIndexes.every(index => ownerAfter[index] === trade.to);
+  });
 }
 
 function canUseTradeConditions(room, trade) {
   const conditions = trade.conditions || {};
-  const toGroups = getPlayerOwnedGroups(room, trade.to);
-  const validGroups = new Set(toGroups);
+  const validGroups = new Set(getGrantorFullGroupsAfterTrade(room, trade));
 
-  for (const tileIndex of trade.fromTiles || []) {
-    const tile = room.tiles[tileIndex];
-    if (tile?.type === 'property' && tile.group) validGroups.add(tile.group);
+  if (conditions.rentFreeEnabled && !conditions.rentFreeGroup) {
+    return { ok: false, reason: 'Izaberi set za uslov bez rente.' };
   }
 
-  for (const tileIndex of trade.toTiles || []) {
-    const tile = room.tiles[tileIndex];
-    if (tile?.type === 'property' && tile.group) validGroups.add(tile.group);
+  if (conditions.rentFreeEnabled && !validGroups.has(conditions.rentFreeGroup)) {
+    return { ok: false, reason: `${room.players[trade.to]?.name || 'Igrač'} neće imati ceo taj set posle razmene.` };
   }
 
-  if (conditions.rentFreeGroup && !validGroups.has(conditions.rentFreeGroup)) {
-    return { ok: false, reason: `${room.players[trade.to]?.name || 'Igrač'} nema taj set u razmeni/uslovu.` };
-  }
-
-  if (conditions.revenueSharePercent > 0 && !conditions.revenueShareGroup) {
+  if (conditions.revenueShareEnabled && !conditions.revenueShareGroup) {
     return { ok: false, reason: 'Izaberi set za procenat rente.' };
   }
 
-  if (conditions.revenueShareGroup && !validGroups.has(conditions.revenueShareGroup)) {
-    return { ok: false, reason: `${room.players[trade.to]?.name || 'Igrač'} nema taj set u razmeni/uslovu.` };
+  if (conditions.revenueShareEnabled && conditions.revenueSharePercent <= 0) {
+    return { ok: false, reason: 'Procenat rente mora biti veći od 0%.' };
+  }
+
+  if (conditions.revenueShareEnabled && !validGroups.has(conditions.revenueShareGroup)) {
+    return { ok: false, reason: `${room.players[trade.to]?.name || 'Igrač'} neće imati ceo taj set posle razmene.` };
   }
 
   return { ok: true, reason: 'OK' };
@@ -432,17 +457,19 @@ function canUseTradeConditions(room, trade) {
 
 function addTradeAgreement(room, trade) {
   const conditions = trade.conditions || {};
-  const hasRentFree = Boolean(conditions.rentFreeGroup);
-  const hasShare = Boolean(conditions.revenueShareGroup && conditions.revenueSharePercent > 0);
+  const hasRentFree = Boolean(conditions.rentFreeEnabled && conditions.rentFreeGroup);
+  const hasShare = Boolean(conditions.revenueShareEnabled && conditions.revenueShareGroup && conditions.revenueSharePercent > 0);
   if (!hasRentFree && !hasShare) return;
 
   const agreement = {
     id: `a_${Date.now().toString(36)}_${room.tradeIdCounter}_${crypto.randomBytes(3).toString('hex')}`,
     beneficiary: trade.from,
     grantor: trade.to,
-    rentFreeGroup: conditions.rentFreeGroup || null,
-    revenueShareGroup: conditions.revenueShareGroup || null,
-    revenueSharePercent: clampPercent(conditions.revenueSharePercent, 0, 40),
+    rentFreeEnabled: Boolean(conditions.rentFreeEnabled),
+    rentFreeGroup: conditions.rentFreeEnabled ? (conditions.rentFreeGroup || null) : null,
+    revenueShareEnabled: Boolean(conditions.revenueShareEnabled),
+    revenueShareGroup: conditions.revenueShareEnabled ? (conditions.revenueShareGroup || null) : null,
+    revenueSharePercent: conditions.revenueShareEnabled ? clampPercent(conditions.revenueSharePercent, 0, 40) : 0,
     createdAt: Date.now(),
     sourceTradeId: trade.id
   };
@@ -721,7 +748,7 @@ io.on('connection', socket => {
       kind: originalTrade ? 'counter' : 'offer',
       replyTo: originalTrade ? originalTrade.id : null
     };
-    const hasConditions = Boolean(trade.conditions.rentFreeGroup || (trade.conditions.revenueShareGroup && trade.conditions.revenueSharePercent > 0));
+    const hasConditions = Boolean((trade.conditions.rentFreeEnabled && trade.conditions.rentFreeGroup) || (trade.conditions.revenueShareEnabled && trade.conditions.revenueShareGroup && trade.conditions.revenueSharePercent > 0));
     if (trade.fromMoney <= 0 && trade.toMoney <= 0 && trade.fromTiles.length === 0 && trade.toTiles.length === 0 && !hasConditions) {
       return emitError(socket, 'Izaberi novac, polje ili uslov za razmenu.');
     }
