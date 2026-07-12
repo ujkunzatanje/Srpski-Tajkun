@@ -14,7 +14,7 @@ This is the first online test version.
 ## How it works
 
 - One temporary room code per game.
-- 2–4 players.
+- 2–6 players.
 - No account system.
 - No database.
 - Game state is stored only in server memory.

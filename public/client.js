@@ -45,7 +45,9 @@ const setupColorChoices = [
   { name: "Plava", value: "#2f6bff" },
   { name: "Zelena", value: "#22c55e" },
   { name: "Narandžasta", value: "#f59e0b" },
-  { name: "Roze", value: "#ef476f" }
+  { name: "Roze", value: "#ef476f" },
+  { name: "Tirkizna", value: "#06b6d4" },
+  { name: "Ljubičasta", value: "#a855f7" }
 ];
 
 const setupScreen = document.getElementById("setupScreen");
