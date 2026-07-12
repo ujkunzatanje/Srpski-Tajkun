@@ -465,13 +465,17 @@ io.on('connection', socket => {
     if (room.players.length < 2) return emitError(socket, 'Potrebna su bar 2 igrača.');
     if (room.status !== 'lobby') return emitError(socket, 'Igra je već počela.');
 
+    room.players = shuffle(room.players);
+    room.currentPlayerIndex = 0;
     room.status = 'playing';
     room.stats.game.startedAt = new Date().toISOString();
     room.stats.game.status = 'playing';
     room.stats.game.playerCount = room.players.filter(player => !player.bankrupt).length;
     room.players.forEach(player => ensurePlayerStats(room, player));
+    const playOrder = room.players.map(player => player.name).join(' → ');
     room.actionText = `${room.players[0].name}, baci kockice.`;
     addLog(room, `Igra je počela. Broj igrača: ${room.players.length}.`);
+    addLog(room, `Nasumičan redosled igranja: ${playOrder}.`);
     scheduleRollTimer(room);
     touchRoom(room);
     emitRoom(room);
