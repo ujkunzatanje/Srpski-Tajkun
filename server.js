@@ -13,7 +13,7 @@ const STARTING_MONEY = 3000;
 const MAX_PLAYERS = 6;
 const ROOM_IDLE_DELETE_MS = 30 * 60 * 1000;
 const ENDED_ROOM_DELETE_MS = 5 * 60 * 1000;
-const JAIL_FEE = 60;
+const JAIL_FEE = 140;
 const ADMIN_STATS_KEY = process.env.ADMIN_STATS_KEY || 'kuntaj1312';
 
 const app = express();
@@ -291,7 +291,9 @@ function makePlayer({ id, socketId, name, color }) {
     bankrupt: false,
     inDebt: false,
     inJail: false,
+    jailRollAttempts: 0,
     jailVouchers: 0,
+    laps: 0,
     connected: true,
     kicked: false,
     lastSeen: Date.now()
@@ -326,7 +328,7 @@ function publicRoomState(room) {
     code: room.code,
     hostId: room.hostId,
     status: room.status,
-    players: room.players.map(({ id, name, color, money, position, bankrupt, inDebt, inJail, jailVouchers, connected, kicked }) => ({ id, name, color, money, position, bankrupt, inDebt, inJail, jailVouchers: Number(jailVouchers) || 0, connected, kicked })),
+    players: room.players.map(({ id, name, color, money, position, bankrupt, inDebt, inJail, jailRollAttempts, jailVouchers, laps, connected, kicked }) => ({ id, name, color, money, position, bankrupt, inDebt, inJail, jailRollAttempts: Number(jailRollAttempts) || 0, jailVouchers: Number(jailVouchers) || 0, laps: Number(laps) || 0, connected, kicked })),
     tiles: room.tiles,
     currentPlayerIndex: room.currentPlayerIndex,
     diceRolled: room.diceRolled,
@@ -395,13 +397,14 @@ function cleanTradeConditions(rawConditions) {
     if (!group) continue;
 
     const percent = type === 'revenueShare' ? clampPercent(rawItem.percent ?? rawItem.revenueSharePercent, 0, 40) : 0;
+    const laps = type === 'rentFree' ? clampLaps(rawItem.laps ?? rawItem.circles ?? rawItem.rentFreeLaps, 1, 3) : 0;
     if (type === 'revenueShare' && percent <= 0) continue;
 
-    const key = `${type}:${beneficiarySide}:${grantorSide}:${group}:${percent}`;
+    const key = `${type}:${beneficiarySide}:${grantorSide}:${group}:${percent}:${laps}`;
     if (seen.has(key)) continue;
     seen.add(key);
 
-    items.push({ type, beneficiary: beneficiarySide, grantor: grantorSide, group, percent });
+    items.push({ type, beneficiary: beneficiarySide, grantor: grantorSide, group, percent, laps });
     if (items.length >= 8) break;
   }
 
@@ -411,7 +414,7 @@ function cleanTradeConditions(rawConditions) {
 function convertLegacyTradeConditions(conditions) {
   const items = [];
   if (conditions.rentFreeEnabled || conditions.rentFreeGroup) {
-    items.push({ type: 'rentFree', beneficiary: 'from', grantor: 'to', group: conditions.rentFreeGroup });
+    items.push({ type: 'rentFree', beneficiary: 'from', grantor: 'to', group: conditions.rentFreeGroup, laps: conditions.rentFreeLaps || conditions.laps || 1 });
   }
   if (conditions.revenueShareEnabled || conditions.revenueShareGroup || Number(conditions.revenueSharePercent) > 0) {
     items.push({ type: 'revenueShare', beneficiary: 'from', grantor: 'to', group: conditions.revenueShareGroup, percent: conditions.revenueSharePercent });
@@ -425,6 +428,11 @@ function cleanGroupName(value) {
 
 function clampPercent(value, min = 0, max = 40) {
   const number = Math.floor(Number(value) || 0);
+  return Math.max(min, Math.min(max, number));
+}
+
+function clampLaps(value, min = 1, max = 3) {
+  const number = Math.floor(Number(value) || min);
   return Math.max(min, Math.min(max, number));
 }
 
@@ -515,6 +523,8 @@ function addTradeAgreement(room, trade) {
       grantor: grantorIndex,
       group: item.group,
       percent: item.type === 'revenueShare' ? clampPercent(item.percent, 0, 40) : 0,
+      laps: item.type === 'rentFree' ? clampLaps(item.laps, 1, 3) : 0,
+      beneficiaryStartLaps: item.type === 'rentFree' ? (Number(beneficiary.laps) || 0) : null,
       rentFreeGroup: item.type === 'rentFree' ? item.group : null,
       revenueShareGroup: item.type === 'revenueShare' ? item.group : null,
       revenueSharePercent: item.type === 'revenueShare' ? clampPercent(item.percent, 0, 40) : 0,
@@ -524,7 +534,7 @@ function addTradeAgreement(room, trade) {
 
     room.agreements.push(agreement);
     if (item.type === 'rentFree') {
-      summary.push(`${beneficiary.name} ne plaća rentu na ${item.group} setu igrača ${grantor.name}`);
+      summary.push(`${beneficiary.name} ne plaća rentu ${clampLaps(item.laps, 1, 3)} krug/a na ${item.group} setu igrača ${grantor.name}`);
     } else {
       summary.push(`${grantor.name} plaća ${agreement.percent}% rente sa ${item.group} seta igraču ${beneficiary.name}`);
     }
@@ -534,12 +544,21 @@ function addTradeAgreement(room, trade) {
 }
 
 function hasRentFreeAgreement(room, payerIndex, ownerIndex, groupName) {
-  return (room.agreements || []).some(agreement =>
-    agreement.beneficiary === payerIndex &&
-    agreement.grantor === ownerIndex &&
-    (agreement.group === groupName || agreement.rentFreeGroup === groupName) &&
-    (agreement.type === 'rentFree' || agreement.rentFreeGroup)
-  );
+  const payer = room.players[payerIndex];
+  if (!payer) return false;
+  const payerLaps = Number(payer.laps) || 0;
+  return (room.agreements || []).some(agreement => {
+    if (agreement.beneficiary !== payerIndex) return false;
+    if (agreement.grantor !== ownerIndex) return false;
+    if (agreement.group !== groupName && agreement.rentFreeGroup !== groupName) return false;
+    if (agreement.type !== 'rentFree' && !agreement.rentFreeGroup) return false;
+
+    const laps = clampLaps(agreement.laps || agreement.rentFreeLaps || 1, 1, 3);
+    const startLaps = Number.isFinite(Number(agreement.beneficiaryStartLaps))
+      ? Number(agreement.beneficiaryStartLaps)
+      : 0;
+    return payerLaps < startLaps + laps;
+  });
 }
 
 function applyRevenueShareAgreements(room, payerIndex, ownerIndex, tile, rentAmount) {
@@ -1286,6 +1305,9 @@ function recordJail(room, playerIndex, action, amount = 0) {
     room.stats.jail.rollFailPaid += 1;
     room.stats.jail.feesPaid += amount;
   }
+  if (action === 'rollFailStay') {
+    room.stats.jail.rollAttempts += 1;
+  }
   if (action === 'threeDoubles') {
     room.stats.jail.threeDoubles += 1;
     room.stats.rolls.threeDoublesToJail += 1;
@@ -1455,6 +1477,7 @@ function performRollDice(room, playerIndex, automatic) {
 
   if (isDouble && room.doubleRollCount >= 3) {
     player.inJail = true;
+    player.jailRollAttempts = 0;
     room.doubleRollCount = 0;
     recordJail(room, playerIndex, 'threeDoubles');
     directMove(room, player, 10, paths, false);
@@ -1489,6 +1512,7 @@ function resolveJailVoucher(room, playerIndex) {
   clearTurnTimer(room);
   player.jailVouchers = Math.max(0, (Number(player.jailVouchers) || 0) - 1);
   player.inJail = false;
+  player.jailRollAttempts = 0;
   room.diceRolled = true;
   room.canRollAgain = false;
   room.doubleRollCount = 0;
@@ -1505,6 +1529,7 @@ function resolveJailPayment(room, playerIndex, automatic) {
   clearTurnTimer(room);
   player.money -= JAIL_FEE;
   player.inJail = false;
+  player.jailRollAttempts = 0;
   recordJail(room, playerIndex, 'paidToLeave', JAIL_FEE);
   room.diceRolled = true;
   room.canRollAgain = false;
@@ -1532,16 +1557,25 @@ function performJailRoll(room, playerIndex, automatic) {
   room.lastRollTotal = d1 + d2;
   room.landedTileIndex = player.position;
 
+  player.jailRollAttempts = (Number(player.jailRollAttempts) || 0) + 1;
+
   if (d1 === d2) {
     player.inJail = false;
+    player.jailRollAttempts = 0;
     recordJail(room, playerIndex, 'rollSuccess');
     room.actionText = `${automatic ? '⏱ ' : ''}${player.name} je bacio duple ${d1}+${d2} i izašao iz pritvora. To je ceo potez za ovaj krug.`;
+    addLog(room, room.actionText);
+  } else if (player.jailRollAttempts < 2) {
+    player.inJail = true;
+    recordJail(room, playerIndex, 'rollFailStay');
+    room.actionText = `${automatic ? '⏱ ' : ''}${player.name} nije bacio duple (${d1}+${d2}). Ostaje u pritvoru i ima još jedan pokušaj sledeći potez, ili može da plati ${money(JAIL_FEE)}.`;
     addLog(room, room.actionText);
   } else {
     player.money -= JAIL_FEE;
     player.inJail = false;
+    player.jailRollAttempts = 0;
     recordJail(room, playerIndex, 'rollFailPaid', JAIL_FEE);
-    room.actionText = `${automatic ? '⏱ ' : ''}${player.name} nije bacio duple (${d1}+${d2}) i plaća ${money(JAIL_FEE)}. To je ceo potez za ovaj krug.`;
+    room.actionText = `${automatic ? '⏱ ' : ''}${player.name} nije bacio duple (${d1}+${d2}) ni iz drugog pokušaja i plaća ${money(JAIL_FEE)}. To je ceo potez za ovaj krug.`;
     addLog(room, room.actionText);
     checkDebt(room, player);
     if (player.money <= 0) {
@@ -1586,6 +1620,30 @@ function validateCurrentPlayerAction(room, playerIndex) {
   if (!player || player.bankrupt) return { ok: false, reason: 'Bankrotirao si.' };
   if (player.money <= 0) return { ok: false, reason: `Moraš da se vratiš iznad ${money(0)} trgovinom ili da proglasiš bankrot.` };
   return { ok: true };
+}
+
+function incrementPlayerLap(room, player) {
+  if (!player || player.bankrupt) return;
+  player.laps = (Number(player.laps) || 0) + 1;
+  const playerIndex = room.players.indexOf(player);
+  const expired = [];
+
+  for (const agreement of room.agreements || []) {
+    if (agreement.beneficiary !== playerIndex) continue;
+    if (agreement.type !== 'rentFree' && !agreement.rentFreeGroup) continue;
+    const laps = clampLaps(agreement.laps || agreement.rentFreeLaps || 1, 1, 3);
+    const startLaps = Number.isFinite(Number(agreement.beneficiaryStartLaps))
+      ? Number(agreement.beneficiaryStartLaps)
+      : 0;
+    if (!agreement.expired && (Number(player.laps) || 0) >= startLaps + laps) {
+      agreement.expired = true;
+      expired.push(agreement);
+    }
+  }
+
+  if (expired.length) {
+    addLog(room, `📜 ${player.name} je završio krug i jedan ili više uslova bez rente je isteklo.`);
+  }
 }
 
 function movePlayer(room, player, steps, paths) {
@@ -1668,8 +1726,9 @@ function handleTile(room, player, paths) {
 
   if (tile.type === 'goToJail') {
     player.inJail = true;
+    player.jailRollAttempts = 0;
     recordJail(room, room.players.indexOf(player), 'sentToJail');
-    room.actionText = `${player.name} ide u pritvor. Sledeći potez mora da plati ${money(JAIL_FEE)} ili baci duple.`;
+    room.actionText = `${player.name} ide u pritvor. Ima 2 pokušaja da baci duple ili može da plati ${money(JAIL_FEE)}.`;
     addLog(room, room.actionText);
     directMove(room, player, 10, paths, false);
     return;
@@ -1823,6 +1882,7 @@ function kickPlayer(room, playerIndex) {
   player.connected = false;
   player.inDebt = false;
   player.inJail = false;
+  player.jailRollAttempts = 0;
   recordBankruptcy(room, playerIndex, 'kick');
   addLog(room, `🚪 ${player.name} je izbačen iz igre. Sva njegova polja se vraćaju banci.`);
   room.tiles.forEach(tile => {
@@ -1871,6 +1931,7 @@ function declareBankruptcy(room, playerIndex) {
   player.bankrupt = true;
   player.inDebt = false;
   player.inJail = false;
+  player.jailRollAttempts = 0;
   recordBankruptcy(room, playerIndex, 'declared');
   addLog(room, `💀 ${player.name} je proglasio bankrot. Sva polja se vraćaju banci.`);
   room.tiles.forEach(tile => {

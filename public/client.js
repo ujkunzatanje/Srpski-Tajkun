@@ -872,6 +872,7 @@ function renderControls() {
 
   rollBtn.disabled = !isMyTurn || (diceRolled && !canRollAgain) || gameOver || isAnimating || !player || player.bankrupt || blockedByDebt || player.inJail;
   rollBtn.textContent = canRollAgain && isMyTurn ? "Baci opet" : "Baci kockice";
+  jailRollBtn.textContent = `Bacaj za duple (${Math.min(2, (Number(player?.jailRollAttempts) || 0) + 1)}/2)`;
   jailRollBtn.disabled = !inJailTurn || isAnimating;
   jailPayBtn.disabled = !inJailTurn || isAnimating;
   jailVoucherBtn.disabled = !inJailTurn || isAnimating || (Number(player?.jailVouchers) || 0) <= 0;
@@ -1118,9 +1119,10 @@ function makeConditionSideHtml(grantorSide) {
       ${hasGroups ? `
         <button type="button" class="condition-option ${rentCondition ? "selected" : ""}" onclick="toggleTradeCondition('rentFree','${beneficiarySide}','${grantorSide}')">
           <span class="condition-option-title">Bez rente</span>
-          <span>${safeText(beneficiary.name)} ne plaća rentu ako stane na izabrani set.</span>
+          <span>${safeText(beneficiary.name)} ne plaća rentu na izabrani set određeni broj krugova.</span>
         </button>
         ${makeConditionGroupButtons("rentFree", beneficiarySide, grantorSide, groups, rentCondition?.group || "")}
+        ${makeConditionLapsButtons(beneficiarySide, grantorSide, rentCondition)}
 
         <button type="button" class="condition-option ${shareCondition ? "selected" : ""}" onclick="toggleTradeCondition('revenueShare','${beneficiarySide}','${grantorSide}')">
           <span class="condition-option-title">Procenat rente</span>
@@ -1143,6 +1145,23 @@ function makeConditionGroupButtons(type, beneficiarySide, grantorSide, groups, s
           ${safeText(getGroupDisplayName(group))}
         </button>
       `).join("")}
+    </div>
+  `;
+}
+
+function makeConditionLapsButtons(beneficiarySide, grantorSide, condition) {
+  if (!condition) return "";
+  const selectedLaps = Math.max(1, Math.min(3, Math.floor(Number(condition.laps) || 1)));
+  return `
+    <div class="condition-laps-control">
+      <span>Važi koliko krugova?</span>
+      <div class="condition-laps-buttons">
+        ${[1, 2, 3].map(laps => `
+          <button type="button" class="condition-lap-button ${selectedLaps === laps ? "selected" : ""}" onclick="setTradeConditionLaps('${beneficiarySide}','${grantorSide}',${laps})">
+            ${laps} ${laps === 1 ? "krug" : "kruga"}
+          </button>
+        `).join("")}
+      </div>
     </div>
   `;
 }
@@ -1180,7 +1199,8 @@ function toggleTradeCondition(type, beneficiarySide, grantorSide) {
       beneficiary: beneficiarySide,
       grantor: grantorSide,
       group: groups[0],
-      percent: type === "revenueShare" ? 10 : 0
+      percent: type === "revenueShare" ? 10 : 0,
+      laps: type === "rentFree" ? 1 : 0
     });
   }
   renderTradeBuilder(activeTradeDraft.replaceTradeId ? "Pregovaraj i pošalji novu ponudu" : "Napravi razmenu");
@@ -1192,6 +1212,15 @@ function setTradeConditionGroup(type, beneficiarySide, grantorSide, group) {
   const condition = findDraftCondition(type, beneficiarySide, grantorSide);
   if (!condition) return;
   condition.group = group;
+  renderTradeBuilder(activeTradeDraft.replaceTradeId ? "Pregovaraj i pošalji novu ponudu" : "Napravi razmenu");
+}
+
+function setTradeConditionLaps(beneficiarySide, grantorSide, laps) {
+  if (!activeTradeDraft) return;
+  updateTradeDraftMoneyFromUi();
+  const condition = findDraftCondition("rentFree", beneficiarySide, grantorSide);
+  if (!condition) return;
+  condition.laps = Math.max(1, Math.min(3, Math.floor(Number(laps) || 1)));
   renderTradeBuilder(activeTradeDraft.replaceTradeId ? "Pregovaraj i pošalji novu ponudu" : "Napravi razmenu");
 }
 
@@ -1248,14 +1277,15 @@ function normalizeTradeConditions(conditions = {}) {
           beneficiary: item.beneficiary === "to" ? "to" : "from",
           grantor: item.grantor === "from" ? "from" : "to",
           group: item.group || "",
-          percent: Math.max(0, Math.min(40, Math.floor(Number(item.percent) || 0)))
+          percent: Math.max(0, Math.min(40, Math.floor(Number(item.percent) || 0))),
+          laps: item.type === "rentFree" ? Math.max(1, Math.min(3, Math.floor(Number(item.laps) || 1))) : 0
         }))
     };
   }
 
   const items = [];
   if (conditions.rentFreeEnabled && conditions.rentFreeGroup) {
-    items.push({ type: "rentFree", beneficiary: "from", grantor: "to", group: conditions.rentFreeGroup, percent: 0 });
+    items.push({ type: "rentFree", beneficiary: "from", grantor: "to", group: conditions.rentFreeGroup, percent: 0, laps: Math.max(1, Math.min(3, Math.floor(Number(conditions.rentFreeLaps || conditions.laps) || 1))) });
   }
   if (conditions.revenueShareEnabled && conditions.revenueShareGroup && Number(conditions.revenueSharePercent) > 0) {
     items.push({ type: "revenueShare", beneficiary: "from", grantor: "to", group: conditions.revenueShareGroup, percent: Number(conditions.revenueSharePercent) || 0 });
@@ -1285,7 +1315,7 @@ function makeTradeConditionsDetail(conditions = {}) {
     const beneficiaryText = item.beneficiary === "from" ? "Pošiljalac" : "Primalac";
     const grantorText = item.grantor === "from" ? "pošiljaoca" : "primaoca";
     if (item.type === "rentFree") {
-      return `<div class="trade-condition-pill">🚫 ${beneficiaryText} ne plaća rentu na setu ${grantorText}: <strong>${safeText(getGroupDisplayName(item.group))}</strong></div>`;
+      return `<div class="trade-condition-pill">🚫 ${beneficiaryText} ne plaća rentu narednih <strong>${Math.max(1, Math.min(3, Math.floor(Number(item.laps) || 1)))} krug/a</strong> na setu ${grantorText}: <strong>${safeText(getGroupDisplayName(item.group))}</strong></div>`;
     }
     return `<div class="trade-condition-pill">📈 ${beneficiaryText} dobija <strong>${Number(item.percent) || 0}%</strong> rente sa seta ${grantorText}: <strong>${safeText(getGroupDisplayName(item.group))}</strong></div>`;
   });

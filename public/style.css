@@ -2540,3 +2540,51 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 }
+
+/* Version 22: rent-free circles and jail refinements */
+.condition-laps-control {
+  display: grid;
+  gap: 7px;
+  padding: 10px;
+  border-radius: 11px;
+  background: rgba(255,255,255,0.045);
+  color: #d8cdf0;
+  font-size: 13px;
+}
+
+.condition-laps-control > span {
+  color: #fff0b8;
+  font-weight: 900;
+}
+
+.condition-laps-buttons {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.condition-lap-button {
+  min-height: 36px;
+  padding: 7px 8px;
+  border-radius: 10px;
+  background: #241637;
+  border: 1px solid rgba(255,255,255,0.09);
+  color: #f7f2ff;
+  font-size: 12px;
+  font-weight: 900;
+  text-align: center;
+}
+
+.condition-lap-button.selected {
+  background: linear-gradient(135deg, rgba(255, 240, 184, 0.22), rgba(124, 77, 255, 0.42));
+  border-color: rgba(255, 240, 184, 0.90);
+  box-shadow:
+    0 0 0 2px rgba(255, 240, 184, 0.18) inset,
+    0 0 18px rgba(255, 240, 184, 0.12);
+}
+
+@media (max-width: 720px) {
+  .condition-laps-buttons {
+    grid-template-columns: 1fr;
+  }
+}
