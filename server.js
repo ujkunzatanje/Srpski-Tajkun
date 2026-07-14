@@ -50,6 +50,36 @@ function money(amount) {
   return `${CURRENCY}${amount}`;
 }
 
+const mobileShortNames = {
+  'Beograd': 'BG',
+  'Novi Sad': 'NS',
+  'Sremska Mitrovica': 'S. Mit.',
+  'Kragujevac': 'KG',
+  'Kraljevo': 'KR',
+  'Kruševac': 'KŠ',
+  'Zrenjanin': 'ZR',
+  'Smederevo': 'SD',
+  'Pančevo': 'PA',
+  'Novi Pazar': 'NP',
+  'Aerodrom Nikola Tesla': 'N. Tesla',
+  'Aerodrom Niš': 'Aer. Niš',
+  'Autobuska stanica': 'Bus',
+  'Železnička stanica': 'Voz',
+  'Porez na luksuz': 'Luksuz',
+  'Porez na dobit': 'Porez',
+  'Idi u pritvor': 'Pritvor',
+  'Pritvor / prolaz': 'Pritvor',
+  'Vodovod': 'Voda',
+  'START': 'START',
+  'Odmor': 'Odmor',
+  'Blago': 'Blago',
+  'Karta': 'Karta'
+};
+
+function getMobileShortName(name) {
+  return mobileShortNames[name] || name;
+}
+
 function cityDataByBoardOrder() {
   return [
     { name: 'Sombor', price: 60, group: 'Braon', color: '#6f4d3c' },
@@ -145,22 +175,23 @@ function makeProperty(city) {
     group: city.group,
     color: city.color,
     icon: '🏙️',
-    owner: null
+    owner: null,
+    mobileShortName: getMobileShortName(city.name)
   };
 }
 
 function makeTransport(name, icon) {
-  return { type: 'transport', name, price: 200, rent: 25, rentLevels: [25, 50, 100, 200], color: '#455a64', icon, owner: null };
+  return { type: 'transport', name, price: 200, rent: 25, rentLevels: [25, 50, 100, 200], color: '#455a64', icon, owner: null, mobileShortName: getMobileShortName(name) };
 }
 
 function makeUtility(name, icon) {
-  return { type: 'utility', name, price: 150, rent: 0, color: '#00897b', icon, owner: null };
+  return { type: 'utility', name, price: 150, rent: 0, color: '#00897b', icon, owner: null, mobileShortName: getMobileShortName(name) };
 }
 
 function makeTiles() {
   const cities = cityDataByBoardOrder();
   let p = 0;
-  return [
+  const tiles = [
     { type: 'start', name: 'START', emoji: '▶', text: `Stani ${money(LAND_START_BONUS)} / prođi ${money(PASS_START_BONUS)}` },
     makeProperty(cities[p++]),
     { type: 'treasure', name: 'Blago', emoji: '🎁', text: 'Izvuci kartu' },
@@ -202,6 +233,10 @@ function makeTiles() {
     { type: 'tax', name: 'Porez na luksuz', emoji: '💎', amount: 140, text: `Plati ${money(140)} u Odmor` },
     makeProperty(cities[p++])
   ];
+  tiles.forEach(tile => {
+    if (!tile.mobileShortName) tile.mobileShortName = getMobileShortName(tile.name);
+  });
+  return tiles;
 }
 
 function makeEventDeck() {

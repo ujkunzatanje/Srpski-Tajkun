@@ -622,9 +622,20 @@ function translateRoomStatus(status) {
   return status || "soba";
 }
 
-function getTileDisplayName(tile) {
+function isMobileBoardView() {
+  return window.matchMedia && window.matchMedia("(max-width: 720px)").matches;
+}
+
+function getTileSide(index) {
+  if (index >= 0 && index <= 10) return "top";
+  if (index > 10 && index <= 20) return "right";
+  if (index > 20 && index <= 30) return "bottom";
+  return "left";
+}
+
+function getTileDisplayName(tile, index = null) {
   if (!tile) return "";
-  const shortNames = {
+  const desktopShortNames = {
     "Aerodrom Nikola Tesla": "A. Nikola Tesla",
     "Železnička stanica": "Železnica",
     "Autobuska stanica": "Autobus",
@@ -633,7 +644,33 @@ function getTileDisplayName(tile) {
     "Porez na dobit": "Porez dobit",
     "Porez na luksuz": "Porez luksuz"
   };
-  return shortNames[tile.name] || tile.name;
+  const mobileFallback = {
+    "Beograd": "BG",
+    "Novi Sad": "NS",
+    "Sremska Mitrovica": "S. Mit.",
+    "Kragujevac": "KG",
+    "Kraljevo": "KR",
+    "Kruševac": "KŠ",
+    "Zrenjanin": "ZR",
+    "Smederevo": "SD",
+    "Pančevo": "PA",
+    "Novi Pazar": "NP",
+    "Aerodrom Nikola Tesla": "N. Tesla",
+    "Aerodrom Niš": "Aer. Niš",
+    "Autobuska stanica": "Bus",
+    "Železnička stanica": "Voz",
+    "Porez na luksuz": "Luksuz",
+    "Porez na dobit": "Porez",
+    "Idi u pritvor": "Pritvor",
+    "Pritvor / prolaz": "Pritvor",
+    "Vodovod": "Voda"
+  };
+
+  if (isMobileBoardView()) {
+    return tile.mobileShortName || mobileFallback[tile.name] || desktopShortNames[tile.name] || tile.name;
+  }
+
+  return desktopShortNames[tile.name] || tile.name;
 }
 
 function getTileBottomText(tile) {
@@ -657,7 +694,7 @@ function renderBoard() {
     const ownerName = isPurchasable && tile.owner !== null ? players[tile.owner]?.name : "";
     const isOwnedPurchasable = isPurchasable && tile.owner !== null;
 
-    let classes = "tile";
+    let classes = `tile tile-${getTileSide(index)}`;
     if (tile.type === "property") classes += " property-tile";
     if (isOwnedPurchasable) classes += " owned";
     if (selectedTileIndex === index) classes += " selected";
@@ -685,7 +722,7 @@ function renderBoard() {
 
     tileEl.innerHTML = `
       ${tile.type === "property" ? `<div class="group-glow" ${groupStyle}></div>` : ""}
-      <div class="tile-name">${safeText(getTileDisplayName(tile))}</div>
+      <div class="tile-name">${safeText(getTileDisplayName(tile, index))}</div>
       <div class="tile-icon-slot">${icon || ""}</div>
       ${buildingMarker}
       ${bottomContent}
@@ -695,9 +732,11 @@ function renderBoard() {
 
 function getBuildingIconHtml(houses) {
   const level = Math.min(5, Math.max(0, Number(houses) || 0));
-  if (level === 5) return `<span class="hotel-icon">🏨</span>`;
+  if (level === 5) {
+    return `<img class="building-icon hotel-icon" src="assets/hotel.png" alt="Hotel" />`;
+  }
   if (level <= 0) return "";
-  return `<span class="single-building-icon">🏠</span>${level > 1 ? `<span class="building-count">x${level}</span>` : ""}`;
+  return `<img class="building-icon single-building-icon" src="assets/house.png" alt="Kuća" />${level > 1 ? `<span class="building-count">x${level}</span>` : ""}`;
 }
 
 function renderAvatars() {
