@@ -111,6 +111,7 @@ jailVoucherBtn.addEventListener("click", () => socket.emit("game:useJailVoucher"
 buyBtn.addEventListener("click", () => socket.emit("game:buy"));
 endTurnBtn.addEventListener("click", () => socket.emit("game:endTurn"));
 window.addEventListener("resize", () => {
+  renderBoard();
   renderAvatars();
   renderTileInfoCard();
 });
@@ -633,44 +634,46 @@ function getTileSide(index) {
   return "left";
 }
 
-function getTileDisplayName(tile, index = null) {
+const desktopTileShortNames = {
+  "Aerodrom Nikola Tesla": "A. Nikola Tesla",
+  "Železnička stanica": "Železnica",
+  "Autobuska stanica": "Autobus",
+  "Sremska Mitrovica": "S. Mitrovica",
+  "Pritvor / prolaz": "Pritvor",
+  "Porez na dobit": "Porez dobit",
+  "Porez na luksuz": "Porez luksuz"
+};
+
+const mobileTileFallbackNames = {
+  "Beograd": "BG",
+  "Novi Sad": "NS",
+  "Sremska Mitrovica": "S. Mit.",
+  "Kragujevac": "KG",
+  "Kraljevo": "KR",
+  "Kruševac": "KŠ",
+  "Zrenjanin": "ZR",
+  "Smederevo": "SD",
+  "Pančevo": "PA",
+  "Novi Pazar": "NP",
+  "Aerodrom Nikola Tesla": "N. Tesla",
+  "Aerodrom Niš": "Aer. Niš",
+  "Autobuska stanica": "Bus",
+  "Železnička stanica": "Voz",
+  "Porez na luksuz": "Luksuz",
+  "Porez na dobit": "Porez",
+  "Idi u pritvor": "Pritvor",
+  "Pritvor / prolaz": "Pritvor",
+  "Vodovod": "Voda"
+};
+
+function getDesktopTileName(tile) {
   if (!tile) return "";
-  const desktopShortNames = {
-    "Aerodrom Nikola Tesla": "A. Nikola Tesla",
-    "Železnička stanica": "Železnica",
-    "Autobuska stanica": "Autobus",
-    "Sremska Mitrovica": "S. Mitrovica",
-    "Pritvor / prolaz": "Pritvor",
-    "Porez na dobit": "Porez dobit",
-    "Porez na luksuz": "Porez luksuz"
-  };
-  const mobileFallback = {
-    "Beograd": "BG",
-    "Novi Sad": "NS",
-    "Sremska Mitrovica": "S. Mit.",
-    "Kragujevac": "KG",
-    "Kraljevo": "KR",
-    "Kruševac": "KŠ",
-    "Zrenjanin": "ZR",
-    "Smederevo": "SD",
-    "Pančevo": "PA",
-    "Novi Pazar": "NP",
-    "Aerodrom Nikola Tesla": "N. Tesla",
-    "Aerodrom Niš": "Aer. Niš",
-    "Autobuska stanica": "Bus",
-    "Železnička stanica": "Voz",
-    "Porez na luksuz": "Luksuz",
-    "Porez na dobit": "Porez",
-    "Idi u pritvor": "Pritvor",
-    "Pritvor / prolaz": "Pritvor",
-    "Vodovod": "Voda"
-  };
+  return desktopTileShortNames[tile.name] || tile.name;
+}
 
-  if (isMobileBoardView()) {
-    return tile.mobileShortName || mobileFallback[tile.name] || desktopShortNames[tile.name] || tile.name;
-  }
-
-  return desktopShortNames[tile.name] || tile.name;
+function getMobileTileName(tile) {
+  if (!tile) return "";
+  return tile.mobileShortName || mobileTileFallbackNames[tile.name] || desktopTileShortNames[tile.name] || tile.name;
 }
 
 function getTileBottomText(tile) {
@@ -694,7 +697,7 @@ function renderBoard() {
     const ownerName = isPurchasable && tile.owner !== null ? players[tile.owner]?.name : "";
     const isOwnedPurchasable = isPurchasable && tile.owner !== null;
 
-    let classes = `tile tile-${getTileSide(index)}`;
+    let classes = `tile tile-side-${getTileSide(index)}`;
     if (tile.type === "property") classes += " property-tile";
     if (isOwnedPurchasable) classes += " owned";
     if (selectedTileIndex === index) classes += " selected";
@@ -720,10 +723,14 @@ function renderBoard() {
       ? `<div class="owned-strip" style="--owner-color:${ownerColor}"><span>${safeText(ownerName)}</span></div>`
       : `<div class="tile-bottom"><span class="tile-price">${safeText(priceText)}</span></div>`;
 
+    tileEl.title = tile.name || "Polje";
     tileEl.innerHTML = `
       ${tile.type === "property" ? `<div class="group-glow" ${groupStyle}></div>` : ""}
-      <div class="tile-name">${safeText(getTileDisplayName(tile, index))}</div>
-      <div class="tile-icon-slot">${icon || ""}</div>
+      <div class="tile-name">
+        <span class="tile-name-desktop">${safeText(getDesktopTileName(tile))}</span>
+        <span class="tile-name-mobile">${safeText(getMobileTileName(tile))}</span>
+      </div>
+      <div class="tile-icon-slot"><span class="tile-icon-content">${icon || ""}</span></div>
       ${buildingMarker}
       ${bottomContent}
     `;
