@@ -15,9 +15,7 @@ const ROOM_IDLE_DELETE_MS = 30 * 60 * 1000;
 const ENDED_ROOM_DELETE_MS = 5 * 60 * 1000;
 const JAIL_FEE = 140;
 const ADMIN_STATS_KEY = process.env.ADMIN_STATS_KEY || 'kuntaj1312';
-const BOARD_SIDE_LENGTH = 13;
-const BOARD_TILE_COUNT = 48;
-const JAIL_TILE_INDEX = 12;
+const DEFAULT_MAP_KEY = 'serbia';
 
 const app = express();
 const server = http.createServer(app);
@@ -54,6 +52,20 @@ function money(amount) {
 }
 
 const mobileShortNames = {
+  'Beograd': 'BG',
+  'Novi Sad': 'NS',
+  'Sremska Mitrovica': 'S. Mit.',
+  'Kragujevac': 'KG',
+  'Kraljevo': 'KR',
+  'Kruševac': 'KŠ',
+  'Zrenjanin': 'ZR',
+  'Smederevo': 'SD',
+  'Pančevo': 'PA',
+  'Novi Pazar': 'NP',
+  'Aerodrom Nikola Tesla': 'N. Tesla',
+  'Aerodrom Niš': 'Aer. Niš',
+  'Autobuska stanica': 'Bus',
+  'Železnička stanica': 'Voz',
   'Lazarevac': 'Laz.',
   'Barajevo': 'Bar.',
   'Mladenovac': 'Mlad.',
@@ -100,6 +112,33 @@ const mobileShortNames = {
 
 function getMobileShortName(name) {
   return mobileShortNames[name] || name;
+}
+
+function cityDataByBoardOrder() {
+  return [
+    { name: 'Sombor', price: 60, group: 'Braon', color: '#6f4d3c' },
+    { name: 'Kikinda', price: 60, group: 'Braon', color: '#6f4d3c' },
+    { name: 'Zrenjanin', price: 100, group: 'Svetlo plava', color: '#6f86bf' },
+    { name: 'Kruševac', price: 110, group: 'Svetlo plava', color: '#6f86bf' },
+    { name: 'Kraljevo', price: 120, group: 'Svetlo plava', color: '#6f86bf' },
+    { name: 'Užice', price: 130, group: 'Roze', color: '#b047a7' },
+    { name: 'Čačak', price: 140, group: 'Roze', color: '#b047a7' },
+    { name: 'Subotica', price: 160, group: 'Roze', color: '#b047a7' },
+    { name: 'Smederevo', price: 180, group: 'Narandžasta', color: '#e97824' },
+    { name: 'Pančevo', price: 190, group: 'Narandžasta', color: '#e97824' },
+    { name: 'Novi Pazar', price: 200, group: 'Narandžasta', color: '#e97824' },
+    { name: 'Leskovac', price: 210, group: 'Crvena', color: '#d34152' },
+    { name: 'Šabac', price: 220, group: 'Crvena', color: '#d34152' },
+    { name: 'Valjevo', price: 240, group: 'Crvena', color: '#d34152' },
+    { name: 'Jagodina', price: 260, group: 'Žuta', color: '#d7ac2a' },
+    { name: 'Sremska Mitrovica', price: 270, group: 'Žuta', color: '#d7ac2a' },
+    { name: 'Kragujevac', price: 280, group: 'Žuta', color: '#d7ac2a' },
+    { name: 'Niš', price: 290, group: 'Zelena', color: '#269657' },
+    { name: 'Zemun', price: 300, group: 'Zelena', color: '#269657' },
+    { name: 'Novi Sad', price: 320, group: 'Zelena', color: '#269657' },
+    { name: 'Zlatibor', price: 360, group: 'Tamno plava', color: '#2f3f94' },
+    { name: 'Beograd', price: 400, group: 'Tamno plava', color: '#2f3f94' }
+  ];
 }
 
 // The 17 official Belgrade municipalities are kept on the board. Nine well-known
@@ -209,8 +248,9 @@ function getBuildingSellRefund(tile) {
 }
 
 function makeProperty(area) {
-  const rentLevels = rentTableByPrice[area.price] || [area.price * 0.1, area.price * 0.5, area.price * 1.5, area.price * 4, area.price * 5, area.price * 6].map(Math.round);
-  const houseCost = buildingCostForPrice(area.price);
+  let rentLevels = rentTableByPrice[area.price] || [area.price * 0.1, area.price * 0.5, area.price * 1.5, area.price * 4, area.price * 5, area.price * 6].map(Math.round);
+  if (area.name === 'Kikinda') rentLevels = [4, 20, 60, 190, 330, 460];
+  const houseCost = area.name === 'Sombor' ? 15 : buildingCostForPrice(area.price);
   return {
     type: 'property',
     name: area.name,
@@ -222,7 +262,7 @@ function makeProperty(area) {
     houses: 0,
     group: area.group,
     color: area.color,
-    areaType: area.areaType || 'Opština',
+    areaType: area.areaType || null,
     municipality: area.municipality || null,
     icon: '🏙️',
     owner: null,
@@ -246,15 +286,16 @@ function makeStadium(name, clubColor) {
   };
 }
 
-function makeTransport(name, icon) {
-  return { type: 'transport', name, price: 200, rent: 25, rentLevels: [25, 50, 100, 200, 300], color: '#455a64', icon, owner: null, mobileShortName: getMobileShortName(name) };
+function makeTransport(name, icon, maxOwned = 5) {
+  const rentLevels = [25, 50, 100, 200, 300].slice(0, Math.max(1, Math.min(5, Number(maxOwned) || 5)));
+  return { type: 'transport', name, price: 200, rent: 25, rentLevels, color: '#455a64', icon, owner: null, mobileShortName: getMobileShortName(name) };
 }
 
 function makeUtility(name, icon) {
   return { type: 'utility', name, price: 150, rent: 0, color: '#00897b', icon, owner: null, mobileShortName: getMobileShortName(name) };
 }
 
-function makeTiles() {
+function makeBelgradeTiles() {
   const areas = municipalityDataByBoardOrder();
   let p = 0;
   const tiles = [
@@ -311,7 +352,7 @@ function makeTiles() {
     makeProperty(areas[p++])
   ];
 
-  if (tiles.length !== BOARD_TILE_COUNT || p !== areas.length) {
+  if (tiles.length !== 48 || p !== areas.length) {
     throw new Error(`Neispravna tabla: ${tiles.length} polja, iskorišćeno ${p}/${areas.length} lokacija.`);
   }
 
@@ -319,6 +360,91 @@ function makeTiles() {
     if (!tile.mobileShortName) tile.mobileShortName = getMobileShortName(tile.name);
   });
   return tiles;
+}
+
+
+function makeSerbiaTiles() {
+  const cities = cityDataByBoardOrder();
+  let p = 0;
+  const tiles = [
+    { type: 'start', name: 'START', emoji: '▶', text: `Stani ${money(LAND_START_BONUS)} / prođi ${money(PASS_START_BONUS)}` },
+    makeProperty(cities[p++]),
+    { type: 'treasure', name: 'Blago', emoji: '🎁', text: 'Izvuci kartu' },
+    makeProperty(cities[p++]),
+    { type: 'tax', name: 'Porez na dobit', emoji: '💸', taxMode: 'percent', percent: 10, text: 'Plati 10% novca u Odmor' },
+    makeTransport('Aerodrom Niš', '✈️', 4),
+    makeProperty(cities[p++]),
+    makeProperty(cities[p++]),
+    { type: 'event', name: 'Karta', emoji: '?', text: 'Izvuci kartu' },
+    makeProperty(cities[p++]),
+    { type: 'jail', name: 'Pritvor / prolaz', emoji: '🚓', text: 'Samo prolaz' },
+    makeProperty(cities[p++]),
+    makeUtility('EPS', '⚡'),
+    makeProperty(cities[p++]),
+    makeProperty(cities[p++]),
+    makeTransport('Železnička stanica', '🚆', 4),
+    makeProperty(cities[p++]),
+    { type: 'treasure', name: 'Blago', emoji: '🎁', text: 'Izvuci kartu' },
+    makeProperty(cities[p++]),
+    makeProperty(cities[p++]),
+    { type: 'rest', name: 'Odmor', emoji: '🏝️', text: 'Pokupi fond' },
+    makeProperty(cities[p++]),
+    { type: 'event', name: 'Karta', emoji: '?', text: 'Izvuci kartu' },
+    makeProperty(cities[p++]),
+    makeProperty(cities[p++]),
+    makeTransport('Autobuska stanica', '🚌', 4),
+    makeProperty(cities[p++]),
+    makeUtility('Vodovod', '🚰'),
+    makeProperty(cities[p++]),
+    makeProperty(cities[p++]),
+    { type: 'goToJail', name: 'Idi u pritvor', emoji: '👮', text: 'Idi u pritvor' },
+    makeProperty(cities[p++]),
+    makeProperty(cities[p++]),
+    { type: 'treasure', name: 'Blago', emoji: '🎁', text: 'Izvuci kartu' },
+    makeProperty(cities[p++]),
+    makeTransport('Aerodrom Nikola Tesla', '✈️', 4),
+    { type: 'event', name: 'Karta', emoji: '?', text: 'Izvuci kartu' },
+    makeProperty(cities[p++]),
+    { type: 'tax', name: 'Porez na luksuz', emoji: '💎', amount: 140, text: `Plati ${money(140)} u Odmor` },
+    makeProperty(cities[p++])
+  ];
+  if (tiles.length !== 40 || p !== cities.length) {
+    throw new Error(`Neispravna Srbija tabla: ${tiles.length} polja, iskorišćeno ${p}/${cities.length} gradova.`);
+  }
+  tiles.forEach(tile => {
+    if (!tile.mobileShortName) tile.mobileShortName = getMobileShortName(tile.name);
+  });
+  return tiles;
+}
+
+const MAP_CONFIGS = Object.freeze({
+  serbia: {
+    key: 'serbia',
+    name: 'Srbija — gradovi',
+    shortName: 'Gradovi Srbije',
+    sideLength: 11,
+    tileCount: 40,
+    jailTileIndex: 10,
+    makeTiles: makeSerbiaTiles
+  },
+  belgrade: {
+    key: 'belgrade',
+    name: 'Beograd — opštine',
+    shortName: 'Opštine Beograda',
+    sideLength: 13,
+    tileCount: 48,
+    jailTileIndex: 12,
+    makeTiles: makeBelgradeTiles
+  }
+});
+
+function cleanMapKey(value) {
+  const key = String(value || '').trim().toLowerCase();
+  return MAP_CONFIGS[key] ? key : DEFAULT_MAP_KEY;
+}
+
+function getMapConfig(value) {
+  return MAP_CONFIGS[cleanMapKey(value)];
 }
 
 function makeEventDeck() {
@@ -356,12 +482,17 @@ function makeEventDeck() {
   return shuffle(cards);
 }
 
-function createRoom(hostPlayer) {
+function createRoom(hostPlayer, requestedMapKey = DEFAULT_MAP_KEY) {
   const code = makeRoomCode();
-  const roomTiles = makeTiles();
+  const mapConfig = getMapConfig(requestedMapKey);
+  const roomTiles = mapConfig.makeTiles();
   const room = {
     code,
     hostId: hostPlayer.id,
+    mapKey: mapConfig.key,
+    mapName: mapConfig.name,
+    boardSideLength: mapConfig.sideLength,
+    jailTileIndex: mapConfig.jailTileIndex,
     status: 'lobby',
     players: [hostPlayer],
     tiles: roomTiles,
@@ -392,7 +523,7 @@ function createRoom(hostPlayer) {
     turnTimerHandle: null,
     stats: makeStats(code, roomTiles, [hostPlayer])
   };
-  addLog(room, `${hostPlayer.name} je napravio sobu ${code}.`);
+  addLog(room, `${hostPlayer.name} je napravio sobu ${code} · ${mapConfig.name}.`);
   rooms.set(code, room);
   return room;
 }
@@ -444,6 +575,10 @@ function publicRoomState(room) {
   return {
     code: room.code,
     hostId: room.hostId,
+    mapKey: room.mapKey || DEFAULT_MAP_KEY,
+    mapName: room.mapName || getMapConfig(room.mapKey).name,
+    boardSideLength: room.boardSideLength || getMapConfig(room.mapKey).sideLength,
+    jailTileIndex: Number.isInteger(room.jailTileIndex) ? room.jailTileIndex : getMapConfig(room.mapKey).jailTileIndex,
     status: room.status,
     players: room.players.map(({ id, name, color, money, position, bankrupt, inDebt, inJail, jailRollAttempts, jailVouchers, laps, connected, kicked }) => ({ id, name, color, money, position, bankrupt, inDebt, inJail, jailRollAttempts: Number(jailRollAttempts) || 0, jailVouchers: Number(jailVouchers) || 0, laps: Number(laps) || 0, connected, kicked })),
     tiles: room.tiles,
@@ -741,6 +876,9 @@ io.on('connection', socket => {
       exists: true,
       status: room.status,
       playerCount: room.players.filter(player => !player.bankrupt).length,
+      mapKey: room.mapKey || DEFAULT_MAP_KEY,
+      mapName: room.mapName || getMapConfig(room.mapKey).name,
+      boardSideLength: room.boardSideLength || getMapConfig(room.mapKey).sideLength,
       takenColors: room.players.filter(player => !player.bankrupt).map(player => player.color),
       requestTag,
       canReconnect
@@ -748,9 +886,11 @@ io.on('connection', socket => {
   });
 
   socket.on('room:create', (payload = {}) => {
+    const requestedMapKey = String(payload.mapKey || '').trim().toLowerCase();
+    if (!MAP_CONFIGS[requestedMapKey]) return emitError(socket, 'Izaberi mapu pre nego što napraviš sobu.');
     const playerId = payload.playerId || makePlayerId();
     const player = makePlayer({ id: playerId, socketId: socket.id, name: payload.name, color: payload.color });
-    const room = createRoom(player);
+    const room = createRoom(player, requestedMapKey);
     socket.join(room.code);
     socket.data.roomCode = room.code;
     socket.data.playerId = player.id;
@@ -1468,6 +1608,9 @@ function finishStats(room, winner) {
 function makeStatsRoomSummary(room) {
   return {
     code: room.code,
+    mapKey: room.mapKey || DEFAULT_MAP_KEY,
+    mapName: room.mapName || getMapConfig(room.mapKey).name,
+    boardSideLength: room.boardSideLength || getMapConfig(room.mapKey).sideLength,
     status: room.status,
     playerCount: room.players.filter(player => !player.bankrupt).length,
     players: room.players.map(player => ({ name: player.name, color: player.color, bankrupt: player.bankrupt, connected: player.connected })),
@@ -1489,6 +1632,9 @@ function buildStatsExport(room) {
     agreements: room.agreements || [],
     currentState: {
       status: room.status,
+      mapKey: room.mapKey || DEFAULT_MAP_KEY,
+      mapName: room.mapName || getMapConfig(room.mapKey).name,
+      boardSideLength: room.boardSideLength || getMapConfig(room.mapKey).sideLength,
       actionText: room.actionText,
       currentPlayerIndex: room.currentPlayerIndex,
       vacationPot: room.vacationPot,
@@ -1604,7 +1750,7 @@ function performRollDice(room, playerIndex, automatic) {
     player.jailRollAttempts = 0;
     room.doubleRollCount = 0;
     recordJail(room, playerIndex, 'threeDoubles');
-    directMove(room, player, JAIL_TILE_INDEX, paths, false);
+    directMove(room, player, room.jailTileIndex, paths, false);
     room.actionText = `${automatic ? '⏱ ' : ''}${player.name} je bacio treće duple (${d1}+${d2}) i ide direktno u pritvor.`;
     addLog(room, room.actionText);
     room.landedTileIndex = player.position;
@@ -1854,7 +2000,7 @@ function handleTile(room, player, paths) {
     recordJail(room, room.players.indexOf(player), 'sentToJail');
     room.actionText = `${player.name} ide u pritvor. Ima 2 pokušaja da baci duple ili može da plati ${money(JAIL_FEE)}.`;
     addLog(room, room.actionText);
-    directMove(room, player, JAIL_TILE_INDEX, paths, false);
+    directMove(room, player, room.jailTileIndex, paths, false);
     return;
   }
 
@@ -2175,7 +2321,7 @@ function canAcceptTrade(room, trade) {
   return { ok: true, reason: 'OK' };
 }
 
-function uniqueTileIndexes(values, tileCount = BOARD_TILE_COUNT) {
+function uniqueTileIndexes(values, tileCount = Number.MAX_SAFE_INTEGER) {
   if (!Array.isArray(values)) return [];
   return [...new Set(values.map(Number).filter(value => Number.isInteger(value) && value >= 0 && value < tileCount))];
 }

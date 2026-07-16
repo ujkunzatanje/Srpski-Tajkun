@@ -20,23 +20,60 @@
         <button id="reconnectBtn" class="ghost-button">Vrati se u aktivnu sobu</button>
       </div>
 
-      <div class="single-setup-grid">
-        <label>Ime igrača
+      <div class="setup-player-fields">
+        <label class="setup-field setup-name-field">Ime igrača
           <input id="playerName" placeholder="Unesi ime" maxlength="16" autocomplete="nickname" />
         </label>
-        <label>Boja
+
+        <div id="mapPicker" class="map-picker">
+          <div class="map-picker-heading">
+            <span>Izaberi mapu</span>
+            <small>Izbor je obavezan kada praviš novu sobu.</small>
+          </div>
+          <input id="selectedMapKey" type="hidden" value="" />
+          <div class="map-options" role="radiogroup" aria-label="Izbor mape">
+            <button type="button" class="map-option" data-map-key="belgrade" onclick="selectMap('belgrade')" role="radio" aria-checked="false">
+              <span class="map-preview-frame">
+                <img src="assets/map-opstine-beograda.webp" alt="Pregled mape Opštine Beograda" />
+              </span>
+              <span class="map-option-footer">
+                <span class="map-option-copy">
+                  <strong>Opštine Beograda</strong>
+                  <small>13 × 13 · veća mapa + stadioni</small>
+                </span>
+                <span class="map-option-check">✓</span>
+              </span>
+            </button>
+            <button type="button" class="map-option" data-map-key="serbia" onclick="selectMap('serbia')" role="radio" aria-checked="false">
+              <span class="map-preview-frame">
+                <img src="assets/map-gradovi-srbije.webp" alt="Pregled mape Gradovi Srbije" />
+              </span>
+              <span class="map-option-footer">
+                <span class="map-option-copy">
+                  <strong>Gradovi Srbije</strong>
+                  <small>11 × 11 · originalna mapa</small>
+                </span>
+                <span class="map-option-check">✓</span>
+              </span>
+            </button>
+          </div>
+          <p id="mapRequiredHint" class="map-required-hint">Klikni na jednu mapu da je izabereš.</p>
+        </div>
+
+        <label class="setup-field setup-color-field">Boja
           <input id="playerColor" type="hidden" value="#2f6bff" />
           <div id="playerColorOptions" class="color-options" aria-label="Izbor boje igrača"></div>
         </label>
       </div>
 
       <div class="online-actions">
-        <button id="createRoomBtn" class="big-button">Napravi sobu</button>
+        <button id="createRoomBtn" class="big-button" disabled>Izaberi mapu</button>
         <p id="joinLinkNotice" class="small-note hidden">Ušao si preko linka sobe, zato je pravljenje nove sobe sakriveno.</p>
         <div class="join-row">
           <input id="roomCodeInput" placeholder="Kod sobe" maxlength="8" />
           <button id="joinRoomBtn" class="ghost-button">Uđi</button>
         </div>
+        <p id="roomMapHint" class="room-map-hint hidden"></p>
       </div>
 
       <p class="small-note">Server čuva sobu samo dok igra traje. Ako se server restartuje, igra nestaje.</p>
@@ -62,6 +99,7 @@
           <h2>Čekaonica</h2>
           <p>Pošalji kod ili link prijateljima. Host pokreće igru kada uđe 2–6 igrača.</p>
           <div id="lobbyCode" class="room-code-display">-----</div>
+          <div id="lobbyMapName" class="lobby-map-name">Mapa</div>
           <div id="lobbyPlayers" class="lobby-players"></div>
           <button id="hostStartBtn" class="big-button">Pokreni igru</button>
         </div>

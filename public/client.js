@@ -3,10 +3,10 @@ const LAND_START_BONUS = 300;
 const CURRENCY = "€";
 const MOVE_STEP_MS = 185;
 const DICE_ANIMATION_MS = 1000;
-const BOARD_SIDE_LENGTH = 13;
-const BOARD_EDGE_STEPS = BOARD_SIDE_LENGTH - 1;
-const BOARD_TILE_COUNT = BOARD_EDGE_STEPS * 4;
-const BOARD_CORNERS = [0, BOARD_EDGE_STEPS, BOARD_EDGE_STEPS * 2, BOARD_EDGE_STEPS * 3];
+let boardSideLength = 11;
+let boardEdgeSteps = boardSideLength - 1;
+let boardTileCount = boardEdgeSteps * 4;
+let boardCorners = [0, boardEdgeSteps, boardEdgeSteps * 2, boardEdgeSteps * 3];
 
 let socket = null;
 let roomCode = null;
@@ -44,6 +44,9 @@ let gameTimerInterval = null;
 let joinedByRoomLink = false;
 let unavailableColors = [];
 let selectedPlayerColor = "#2f6bff";
+let selectedMapKey = "";
+let activeMapKey = "serbia";
+let activeMapName = "Srbija — gradovi";
 let peekTimer = null;
 let tradeNoticeEl = null;
 let tradeNoticeTimer = null;
@@ -84,13 +87,18 @@ const reconnectBtn = document.getElementById("reconnectBtn");
 const playerNameInput = document.getElementById("playerName");
 const playerColorInput = document.getElementById("playerColor");
 const playerColorOptions = document.getElementById("playerColorOptions");
+const mapPicker = document.getElementById("mapPicker");
+const selectedMapKeyInput = document.getElementById("selectedMapKey");
+const mapRequiredHint = document.getElementById("mapRequiredHint");
 const roomCodeInput = document.getElementById("roomCodeInput");
+const roomMapHint = document.getElementById("roomMapHint");
 const connectionStatus = document.getElementById("connectionStatus");
 const lastRoomBox = document.getElementById("lastRoomBox");
 const lastRoomCodeText = document.getElementById("lastRoomCodeText");
 const roomInfoText = document.getElementById("roomInfoText");
 const lobbyPanel = document.getElementById("lobbyPanel");
 const lobbyCode = document.getElementById("lobbyCode");
+const lobbyMapName = document.getElementById("lobbyMapName");
 const lobbyPlayers = document.getElementById("lobbyPlayers");
 const hostStartBtn = document.getElementById("hostStartBtn");
 const copyRoomBtn = document.getElementById("copyRoomBtn");
@@ -134,7 +142,7 @@ document.addEventListener("pointerdown", event => {
 setDieValue(die1, 1);
 setDieValue(die2, 1);
 renderColorOptions();
-createBoardTiles();
+renderMapOptions();
 ensureTradeNotice();
 connectSocket();
 showLastRoomOption();
@@ -219,6 +227,15 @@ function connectSocket() {
     if (payload.roomCode && currentCode && payload.roomCode !== currentCode) return;
     unavailableColors = Array.isArray(payload.takenColors) ? payload.takenColors : [];
     renderColorOptions();
+    if (roomMapHint) {
+      if (payload.exists && payload.mapName) {
+        roomMapHint.textContent = `Mapa sobe: ${payload.mapName} · ${payload.boardSideLength || "?"} × ${payload.boardSideLength || "?"}`;
+        roomMapHint.classList.remove("hidden");
+      } else {
+        roomMapHint.textContent = "";
+        roomMapHint.classList.add("hidden");
+      }
+    }
   });
 
   socket.on("server:heartbeat", payload => {
@@ -228,9 +245,12 @@ function connectSocket() {
 
 function createRoom() {
   if (!socket || !socket.connected) return showError("Veza još nije spremna.");
+  const mapKey = getSelectedMapKey();
+  if (!mapKey) return showError("Izaberi mapu pre nego što napraviš sobu.");
   socket.emit("room:create", {
     name: getPlayerName(),
     color: getSelectedPlayerColor(),
+    mapKey,
     playerId: getSavedPlayerIdForRoom(null)
   });
 }
@@ -278,6 +298,7 @@ function readRoomFromUrl() {
     joinedByRoomLink = true;
     roomCodeInput.value = code;
     createRoomBtn.classList.add("hidden");
+    if (mapPicker) mapPicker.classList.add("hidden");
     if (joinLinkNotice) joinLinkNotice.classList.remove("hidden");
     setTimeout(requestRoomPeek, 350);
   }
@@ -300,6 +321,40 @@ function cleanRoomCode(code) {
 
 function getSelectedPlayerColor() {
   return playerColorInput?.value || selectedPlayerColor || setupColorChoices[0].value;
+}
+
+function getSelectedMapKey() {
+  const inputValue = String(selectedMapKeyInput?.value || "").trim();
+  if (["serbia", "belgrade"].includes(inputValue)) return inputValue;
+  return ["serbia", "belgrade"].includes(selectedMapKey) ? selectedMapKey : "";
+}
+
+function selectMap(mapKey) {
+  if (!["serbia", "belgrade"].includes(mapKey)) return;
+  selectedMapKey = mapKey;
+  if (selectedMapKeyInput) selectedMapKeyInput.value = mapKey;
+  renderMapOptions();
+}
+
+function renderMapOptions() {
+  selectedMapKey = getSelectedMapKey();
+  document.querySelectorAll('.map-option').forEach(button => {
+    const selected = button.dataset.mapKey === selectedMapKey;
+    button.classList.toggle('selected', selected);
+    button.setAttribute('aria-checked', selected ? 'true' : 'false');
+  });
+
+  const hasSelection = Boolean(selectedMapKey);
+  if (createRoomBtn) {
+    createRoomBtn.disabled = !hasSelection;
+    createRoomBtn.textContent = hasSelection ? "Napravi sobu" : "Izaberi mapu";
+  }
+  if (mapRequiredHint) {
+    mapRequiredHint.textContent = hasSelection
+      ? `Izabrana mapa: ${selectedMapKey === "belgrade" ? "Opštine Beograda" : "Gradovi Srbije"}`
+      : "Klikni na jednu mapu da je izabereš.";
+    mapRequiredHint.classList.toggle("selected", hasSelection);
+  }
 }
 
 function selectPlayerColor(color) {
@@ -400,6 +455,9 @@ function applyState(state, options = {}) {
   if (!state) return;
   const previousTrades = trades || [];
   roomCode = state.code;
+  activeMapKey = state.mapKey || "serbia";
+  activeMapName = state.mapName || (activeMapKey === "belgrade" ? "Beograd — opštine" : "Srbija — gradovi");
+  updateBoardGeometry(Number(state.boardSideLength) || inferBoardSideLength(state.tiles));
   players = state.players || [];
   tiles = state.tiles || [];
   currentPlayerIndex = state.currentPlayerIndex || 0;
@@ -476,8 +534,40 @@ function handleIncomingTradeNotifications(previousTrades = [], nextTrades = []) 
   showTradeNotice(newestTrade.kind === "counter" || newestTrade.replyTo ? "IMAS KONTRA PONUDU!" : "IMAS PONUDU!");
 }
 
+function inferBoardSideLength(nextTiles) {
+  const count = Array.isArray(nextTiles) ? nextTiles.length : 40;
+  const side = Math.round(count / 4) + 1;
+  return side >= 5 ? side : 11;
+}
+
+function updateBoardGeometry(sideLength) {
+  const safeSide = Math.max(5, Math.floor(Number(sideLength) || 11));
+  const nextEdgeSteps = safeSide - 1;
+  const nextTileCount = nextEdgeSteps * 4;
+  const geometryChanged = safeSide !== boardSideLength || board.querySelectorAll(':scope > .tile').length !== nextTileCount;
+
+  boardSideLength = safeSide;
+  boardEdgeSteps = nextEdgeSteps;
+  boardTileCount = nextTileCount;
+  boardCorners = [0, boardEdgeSteps, boardEdgeSteps * 2, boardEdgeSteps * 3];
+
+  document.documentElement.style.setProperty('--board-grid-divisor', String(boardSideLength + 1));
+  document.documentElement.style.setProperty('--board-max-size', activeMapKey === 'belgrade' ? '980px' : '900px');
+  board.style.gridTemplateColumns = `1.35fr repeat(${Math.max(1, boardSideLength - 2)}, 1fr) 1.35fr`;
+  board.style.gridTemplateRows = `1.35fr repeat(${Math.max(1, boardSideLength - 2)}, 1fr) 1.35fr`;
+  if (centerPanel) {
+    centerPanel.style.gridColumn = `2 / ${boardSideLength}`;
+    centerPanel.style.gridRow = `2 / ${boardSideLength}`;
+  }
+  board.dataset.map = activeMapKey;
+  board.dataset.sideLength = String(boardSideLength);
+
+  if (geometryChanged) createBoardTiles();
+}
+
 function createBoardTiles() {
-  for (let i = 0; i < BOARD_TILE_COUNT; i++) {
+  board.querySelectorAll(':scope > .tile').forEach(tile => tile.remove());
+  for (let i = 0; i < boardTileCount; i++) {
     const tileEl = document.createElement("div");
     tileEl.id = `tile-${i}`;
     tileEl.className = "tile";
@@ -498,10 +588,10 @@ function createBoardTiles() {
 
 function getBoardPosition(index) {
   if (index === 0) return { row: 1, column: 1 };
-  if (index <= BOARD_EDGE_STEPS) return { row: 1, column: index + 1 };
-  if (index <= BOARD_EDGE_STEPS * 2) return { row: index - BOARD_EDGE_STEPS + 1, column: BOARD_SIDE_LENGTH };
-  if (index <= BOARD_EDGE_STEPS * 3) return { row: BOARD_SIDE_LENGTH, column: BOARD_EDGE_STEPS * 3 + 1 - index };
-  return { row: BOARD_TILE_COUNT + 1 - index, column: 1 };
+  if (index <= boardEdgeSteps) return { row: 1, column: index + 1 };
+  if (index <= boardEdgeSteps * 2) return { row: index - boardEdgeSteps + 1, column: boardSideLength };
+  if (index <= boardEdgeSteps * 3) return { row: boardSideLength, column: boardEdgeSteps * 3 + 1 - index };
+  return { row: boardTileCount + 1 - index, column: 1 };
 }
 
 function setDieValue(dieElement, value) {
@@ -601,8 +691,9 @@ function renderAll() {
 function renderLobby() {
   const inLobby = roomStatus === "lobby";
   lobbyPanel.classList.toggle("hidden", !inLobby);
-  roomInfoText.textContent = roomCode ? `Soba ${roomCode} · ${translateRoomStatus(roomStatus)}${myPlayerIndex() >= 0 ? ` · Ti si ${players[myPlayerIndex()].name}` : ""}` : "Soba";
+  roomInfoText.textContent = roomCode ? `Soba ${roomCode} · ${activeMapName} · ${translateRoomStatus(roomStatus)}${myPlayerIndex() >= 0 ? ` · Ti si ${players[myPlayerIndex()].name}` : ""}` : "Soba";
   lobbyCode.textContent = roomCode || "-----";
+  if (lobbyMapName) lobbyMapName.textContent = `${activeMapName} · ${boardSideLength} × ${boardSideLength}`;
   lobbyPlayers.innerHTML = players.map(player => `
     <div class="lobby-player-row">
       <div class="lobby-player-left">
@@ -637,9 +728,9 @@ function isMobileBoardView() {
 }
 
 function getTileSide(index) {
-  if (index >= 0 && index <= BOARD_EDGE_STEPS) return "top";
-  if (index <= BOARD_EDGE_STEPS * 2) return "right";
-  if (index <= BOARD_EDGE_STEPS * 3) return "bottom";
+  if (index >= 0 && index <= boardEdgeSteps) return "top";
+  if (index <= boardEdgeSteps * 2) return "right";
+  if (index <= boardEdgeSteps * 3) return "bottom";
   return "left";
 }
 
@@ -735,7 +826,7 @@ function renderBoard() {
     if (tile.type === "stadium") classes += " stadium-tile";
     if (isOwnedPurchasable) classes += " owned";
     if (selectedTileIndex === index) classes += " selected";
-    if (BOARD_CORNERS.includes(index)) classes += " corner";
+    if (boardCorners.includes(index)) classes += " corner";
     if (["start", "rest", "jail", "goToJail"].includes(tile.type)) classes += " special";
     if (tile.type === "event") classes += " event";
     if (tile.type === "treasure") classes += " treasure";
@@ -1806,7 +1897,7 @@ function getTileInfoHtml(tile, index) {
       <div class="info-card property-card" style="--card-accent:${tile.color}">
         <div class="info-accent"></div>
         <h3>${safeText(tile.name)}</h3>
-        <p class="info-subline">${safeText(tile.areaType || "Opština")}${tile.municipality ? ` · opština ${safeText(tile.municipality)}` : ""} · ${safeText(tile.group)} set · vlasnik: ${safeText(owner)}</p>
+        <p class="info-subline">${tile.areaType ? `${safeText(tile.areaType)}${tile.municipality ? ` · opština ${safeText(tile.municipality)}` : ""} · ` : ""}${safeText(tile.group)} set · vlasnik: ${safeText(owner)}</p>
         <p class="info-set-line">${safeText(fullSetText)}</p>
 
         <div class="info-table">

@@ -131,7 +131,7 @@
         roomList.innerHTML = data.rooms.map(room => `
           <button class="room-btn" data-room="${escapeHtml(room.code)}">
             <span class="room-main"><span>${escapeHtml(room.code)}</span><span>${escapeHtml(room.status)}</span></span>
-            <span class="room-sub">Igrači: ${room.playerCount} · Bacanja: ${room.totalRolls} · Potezi: ${room.turnsEnded}</span>
+            <span class="room-sub">${escapeHtml(room.mapName || "Mapa")} · Igrači: ${room.playerCount} · Bacanja: ${room.totalRolls} · Potezi: ${room.turnsEnded}</span>
             <span class="room-sub">${room.players.map(p => escapeHtml(p.name)).join(', ')}</span>
           </button>
         `).join('');
@@ -173,6 +173,7 @@
       summary.innerHTML = `
         <div class="cards">
           <div class="stat-card"><span>Soba</span><strong>${escapeHtml(data.room.code)}</strong></div>
+          <div class="stat-card"><span>Mapa</span><strong>${escapeHtml(data.room.mapName || "-")}</strong></div>
           <div class="stat-card"><span>Status</span><strong>${escapeHtml(data.room.status)}</strong></div>
           <div class="stat-card"><span>Bacanja</span><strong>${rolls.totalRolls || 0}</strong></div>
           <div class="stat-card"><span>Prosek</span><strong>${rolls.averageTotal || 0}</strong></div>
