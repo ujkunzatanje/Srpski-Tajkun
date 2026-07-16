@@ -5,8 +5,8 @@
 :root {
   --gap: 5px;
   --side-panel-width: 360px;
-  --board-size: min(calc(100vw - var(--side-panel-width) - 62px), calc(100vh - 98px), 900px);
-  --tile-size: calc(var(--board-size) / 12);
+  --board-size: min(calc(100vw - var(--side-panel-width) - 62px), calc(100vh - 98px), 980px);
+  --tile-size: calc(var(--board-size) / 14);
   --die-size: 74px;
   --bg: #110a19;
   --panel: #1d122c;
@@ -212,15 +212,15 @@ button:disabled {
   width: var(--board-size);
   height: var(--board-size);
   display: grid;
-  grid-template-columns: 1.35fr repeat(9, 1fr) 1.35fr;
-  grid-template-rows: 1.35fr repeat(9, 1fr) 1.35fr;
+  grid-template-columns: 1.35fr repeat(11, 1fr) 1.35fr;
+  grid-template-rows: 1.35fr repeat(11, 1fr) 1.35fr;
   gap: var(--gap);
   margin: 0 auto;
 }
 
 .center-panel {
-  grid-column: 2 / 11;
-  grid-row: 2 / 11;
+  grid-column: 2 / 13;
+  grid-row: 2 / 13;
   z-index: 1;
   display: flex;
   flex-direction: column;
@@ -447,6 +447,149 @@ button:disabled {
   background: linear-gradient(180deg, #3f5368, #273746);
 }
 
+
+.tile.stadium-tile {
+  background:
+    radial-gradient(circle at 50% 52%, color-mix(in srgb, var(--group-color) 36%, transparent), transparent 48%),
+    linear-gradient(180deg, #263d35, #172921);
+}
+
+.tile.stadium-tile .tile-icon-slot {
+  background: rgba(255, 255, 255, 0.045);
+  border-color: rgba(255, 255, 255, 0.09);
+  overflow: visible;
+}
+
+.stadium-pitch {
+  position: relative;
+  display: block;
+  width: 86%;
+  height: 62%;
+  min-width: 24px;
+  min-height: 16px;
+  max-width: 58px;
+  max-height: 39px;
+  border: 2px solid rgba(255,255,255,0.92);
+  border-radius: 4px;
+  background:
+    repeating-linear-gradient(90deg, rgba(255,255,255,0.06) 0 16%, rgba(0,0,0,0.04) 16% 32%),
+    #249447;
+  box-shadow: 0 3px 7px rgba(0,0,0,0.38);
+}
+
+.stadium-half-line {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgba(255,255,255,0.88);
+  transform: translateX(-50%);
+}
+
+.stadium-centre-circle {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 28%;
+  aspect-ratio: 1;
+  border: 1px solid rgba(255,255,255,0.88);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.stadium-ball {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  font-size: clamp(8px, calc(var(--tile-size) * 0.12), 12px);
+  line-height: 1;
+  transform: translate(-50%, -50%);
+  filter: drop-shadow(0 1px 1px rgba(0,0,0,0.7));
+}
+
+.stadium-stand {
+  position: absolute;
+  display: block;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--group-color) 70%, #c7c7d4);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.45);
+  opacity: 0;
+  transition: opacity 160ms ease;
+}
+
+.stadium-stand-top,
+.stadium-stand-bottom {
+  left: -8%;
+  width: 116%;
+  height: 4px;
+}
+
+.stadium-stand-top { top: -7px; }
+.stadium-stand-bottom { bottom: -7px; }
+
+.stadium-stand-left,
+.stadium-stand-right {
+  top: -7%;
+  width: 4px;
+  height: 114%;
+}
+
+.stadium-stand-left { left: -7px; }
+.stadium-stand-right { right: -7px; }
+
+.stadium-level-1 .stadium-stand-bottom,
+.stadium-level-2 .stadium-stand-bottom,
+.stadium-level-2 .stadium-stand-top,
+.stadium-level-3 .stadium-stand {
+  opacity: 1;
+}
+
+.stadium-level-3 {
+  transform: scale(1.06);
+  box-shadow: 0 4px 10px rgba(0,0,0,0.52), 0 0 9px color-mix(in srgb, var(--group-color) 40%, transparent);
+}
+
+.stadium-marker {
+  top: 48%;
+  right: 2px;
+  left: auto;
+  transform: translateY(-50%);
+}
+
+.stadium-upgrade-badge {
+  display: grid;
+  place-items: center;
+  min-width: 25px;
+  height: 20px;
+  padding: 0 4px;
+  border: 1px solid rgba(255,255,255,0.70);
+  border-radius: 7px;
+  background: rgba(8, 14, 12, 0.82);
+  color: white;
+  font-size: clamp(9px, calc(var(--tile-size) * 0.13), 12px);
+  font-weight: 1000;
+  line-height: 1;
+  box-shadow: 0 4px 8px rgba(0,0,0,0.45);
+}
+
+.stadium-info-icon {
+  display: grid;
+  place-items: center;
+  min-height: 64px;
+}
+
+.stadium-info-icon .stadium-pitch {
+  width: 96px;
+  height: 58px;
+  max-width: none;
+  max-height: none;
+}
+
+.stadium-controls {
+  border-color: color-mix(in srgb, var(--card-accent) 55%, rgba(255,255,255,0.12));
+}
+
 .tile.tax {
   background: linear-gradient(180deg, #653237, #44232a);
 }
@@ -543,7 +686,7 @@ button:disabled {
 .tile-info-card {
   position: absolute;
   z-index: 20;
-  width: clamp(250px, calc(var(--board-size) * 0.30), 320px);
+  width: clamp(260px, calc(var(--board-size) * 0.32), 350px);
   color: white;
   pointer-events: auto;
   max-height: min(78vh, calc(var(--board-size) - 16px));
@@ -2901,6 +3044,47 @@ button:disabled {
     font-size: inherit;
   }
 
+
+  .stadium-pitch {
+    min-width: 17px;
+    min-height: 12px;
+    border-width: 1px;
+    border-radius: 2px;
+  }
+
+  .stadium-stand-top,
+  .stadium-stand-bottom {
+    height: 2px;
+    top: auto;
+  }
+
+  .stadium-stand-top { top: -4px; }
+  .stadium-stand-bottom { bottom: -4px; }
+
+  .stadium-stand-left,
+  .stadium-stand-right {
+    width: 2px;
+  }
+
+  .stadium-stand-left { left: -4px; }
+  .stadium-stand-right { right: -4px; }
+
+  .stadium-ball {
+    font-size: clamp(5px, calc(var(--tile-size) * 0.09), 8px);
+  }
+
+  .stadium-marker {
+    right: 0;
+  }
+
+  .stadium-upgrade-badge {
+    min-width: 18px;
+    height: 14px;
+    padding: 0 2px;
+    border-radius: 5px;
+    font-size: clamp(6px, calc(var(--tile-size) * 0.09), 8px);
+  }
+
   /* Side and bottom tiles have less horizontal room. Keep them clean. */
   .tile-side-left .tile-price,
   .tile-side-right .tile-price,
@@ -2925,5 +3109,23 @@ button:disabled {
   .tile-side-bottom .tile-icon-slot {
     align-self: center;
     justify-self: center;
+  }
+}
+
+
+/* 13x13 stadium marker final positioning overrides */
+.tile .building-marker.stadium-marker {
+  left: auto;
+  right: 2px;
+  top: 48%;
+  transform: translateY(-50%);
+}
+
+@media (max-width: 720px) {
+  .tile .building-marker.stadium-marker {
+    left: auto;
+    right: 0;
+    top: 50%;
+    transform: translateY(-50%);
   }
 }

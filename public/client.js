@@ -3,6 +3,10 @@ const LAND_START_BONUS = 300;
 const CURRENCY = "€";
 const MOVE_STEP_MS = 185;
 const DICE_ANIMATION_MS = 1000;
+const BOARD_SIDE_LENGTH = 13;
+const BOARD_EDGE_STEPS = BOARD_SIDE_LENGTH - 1;
+const BOARD_TILE_COUNT = BOARD_EDGE_STEPS * 4;
+const BOARD_CORNERS = [0, BOARD_EDGE_STEPS, BOARD_EDGE_STEPS * 2, BOARD_EDGE_STEPS * 3];
 
 let socket = null;
 let roomCode = null;
@@ -120,6 +124,11 @@ document.addEventListener("keydown", event => {
     hideTileInfo();
     closeTradeModal();
   }
+});
+document.addEventListener("pointerdown", event => {
+  if (selectedTileIndex === null || !tileInfoCard || tileInfoCard.classList.contains("hidden")) return;
+  if (tileInfoCard.contains(event.target) || event.target.closest(".tile")) return;
+  hideTileInfo();
 });
 
 setDieValue(die1, 1);
@@ -468,7 +477,7 @@ function handleIncomingTradeNotifications(previousTrades = [], nextTrades = []) 
 }
 
 function createBoardTiles() {
-  for (let i = 0; i < 40; i++) {
+  for (let i = 0; i < BOARD_TILE_COUNT; i++) {
     const tileEl = document.createElement("div");
     tileEl.id = `tile-${i}`;
     tileEl.className = "tile";
@@ -489,10 +498,10 @@ function createBoardTiles() {
 
 function getBoardPosition(index) {
   if (index === 0) return { row: 1, column: 1 };
-  if (index > 0 && index <= 10) return { row: 1, column: index + 1 };
-  if (index > 10 && index <= 20) return { row: index - 9, column: 11 };
-  if (index > 20 && index <= 30) return { row: 11, column: 31 - index };
-  return { row: 41 - index, column: 1 };
+  if (index <= BOARD_EDGE_STEPS) return { row: 1, column: index + 1 };
+  if (index <= BOARD_EDGE_STEPS * 2) return { row: index - BOARD_EDGE_STEPS + 1, column: BOARD_SIDE_LENGTH };
+  if (index <= BOARD_EDGE_STEPS * 3) return { row: BOARD_SIDE_LENGTH, column: BOARD_EDGE_STEPS * 3 + 1 - index };
+  return { row: BOARD_TILE_COUNT + 1 - index, column: 1 };
 }
 
 function setDieValue(dieElement, value) {
@@ -574,7 +583,7 @@ async function animateMovementPaths(paths) {
 }
 
 function isPurchasableTile(tile) {
-  return Boolean(tile && ["property", "utility", "transport"].includes(tile.type));
+  return Boolean(tile && ["property", "stadium", "utility", "transport"].includes(tile.type));
 }
 
 function renderAll() {
@@ -628,37 +637,61 @@ function isMobileBoardView() {
 }
 
 function getTileSide(index) {
-  if (index >= 0 && index <= 10) return "top";
-  if (index > 10 && index <= 20) return "right";
-  if (index > 20 && index <= 30) return "bottom";
+  if (index >= 0 && index <= BOARD_EDGE_STEPS) return "top";
+  if (index <= BOARD_EDGE_STEPS * 2) return "right";
+  if (index <= BOARD_EDGE_STEPS * 3) return "bottom";
   return "left";
 }
 
 const desktopTileShortNames = {
-  "Aerodrom Nikola Tesla": "A. Nikola Tesla",
-  "Železnička stanica": "Železnica",
-  "Autobuska stanica": "Autobus",
-  "Sremska Mitrovica": "S. Mitrovica",
+  "Beogradska autobuska stanica": "Autobuska stanica",
+  "Tramvajska stanica": "Tramvaj",
+  "Trolejbuska stanica": "Trolejbus",
+  "BG Voz stanica": "BG Voz",
+  "Autobuski terminal": "Bus terminal",
+  "Stadion Rajko Mitić": "Rajko Mitić",
+  "Stadion Partizana": "Partizan",
+  "Banovo brdo": "Banovo brdo",
+  "Novi Beograd": "Novi Beograd",
   "Pritvor / prolaz": "Pritvor",
   "Porez na dobit": "Porez dobit",
   "Porez na luksuz": "Porez luksuz"
 };
 
 const mobileTileFallbackNames = {
-  "Beograd": "BG",
-  "Novi Sad": "NS",
-  "Sremska Mitrovica": "S. Mit.",
-  "Kragujevac": "KG",
-  "Kraljevo": "KR",
-  "Kruševac": "KŠ",
-  "Zrenjanin": "ZR",
-  "Smederevo": "SD",
-  "Pančevo": "PA",
-  "Novi Pazar": "NP",
-  "Aerodrom Nikola Tesla": "N. Tesla",
-  "Aerodrom Niš": "Aer. Niš",
-  "Autobuska stanica": "Bus",
-  "Železnička stanica": "Voz",
+  "Lazarevac": "Laz.",
+  "Barajevo": "Bar.",
+  "Mladenovac": "Mlad.",
+  "Grocka": "Gro.",
+  "Obrenovac": "Obr.",
+  "Batajnica": "Bat.",
+  "Sopot": "Sop.",
+  "Borča": "Bor.",
+  "Surčin": "Sur.",
+  "Rakovica": "Rak.",
+  "Železnik": "Žel.",
+  "Palilula": "Pal.",
+  "Čukarica": "Čuk.",
+  "Zemun": "Zem.",
+  "Mirijevo": "Mir.",
+  "Zvezdara": "Zvez.",
+  "Karaburma": "Karb.",
+  "Voždovac": "Vožd.",
+  "Banovo brdo": "B. brdo",
+  "Gardoš": "Gard.",
+  "Novi Beograd": "NBG",
+  "Dedinje": "Ded.",
+  "Vračar": "Vrač.",
+  "Dorćol": "Dor.",
+  "Stari grad": "S. grad",
+  "Savski venac": "S. venac",
+  "Stadion Partizana": "Partizan",
+  "Stadion Rajko Mitić": "Zvezda",
+  "Beogradska autobuska stanica": "BAS",
+  "Tramvajska stanica": "Tramvaj",
+  "Trolejbuska stanica": "Trola",
+  "BG Voz stanica": "BG Voz",
+  "Autobuski terminal": "Bus",
   "Porez na luksuz": "Luksuz",
   "Porez na dobit": "Porez",
   "Idi u pritvor": "Pritvor",
@@ -699,9 +732,10 @@ function renderBoard() {
 
     let classes = `tile tile-side-${getTileSide(index)}`;
     if (tile.type === "property") classes += " property-tile";
+    if (tile.type === "stadium") classes += " stadium-tile";
     if (isOwnedPurchasable) classes += " owned";
     if (selectedTileIndex === index) classes += " selected";
-    if ([0, 10, 20, 30].includes(index)) classes += " corner";
+    if (BOARD_CORNERS.includes(index)) classes += " corner";
     if (["start", "rest", "jail", "goToJail"].includes(tile.type)) classes += " special";
     if (tile.type === "event") classes += " event";
     if (tile.type === "treasure") classes += " treasure";
@@ -709,32 +743,58 @@ function renderBoard() {
     if (tile.type === "utility") classes += " utility";
     if (tile.type === "transport") classes += " transport";
     tileEl.className = classes;
-    if (tile.type === "property") tileEl.style.setProperty("--group-color", tile.color || "#7c4dff");
+
+    if (["property", "stadium"].includes(tile.type)) tileEl.style.setProperty("--group-color", tile.color || "#7c4dff");
     else tileEl.style.removeProperty("--group-color");
 
     const ownerColor = isOwnedPurchasable ? players[tile.owner]?.color : "";
     const priceText = getTileBottomText(tile);
-    const icon = isPurchasable ? tile.icon : tile.emoji;
-    const groupStyle = tile.type === "property" ? `style="--group-color:${tile.color}"` : "";
-    const buildingMarker = tile.type === "property" && (tile.houses || 0) > 0
-      ? `<div class="building-marker ${tile.houses === 5 ? "hotel-marker" : "house-marker"}">${getBuildingIconHtml(tile.houses)}</div>`
-      : "";
+    const icon = getTileIconHtml(tile);
+    const accentStyle = ["property", "stadium"].includes(tile.type) ? `style="--group-color:${tile.color}"` : "";
+    const buildingMarker = getBuildingMarkerHtml(tile);
     const bottomContent = isOwnedPurchasable
       ? `<div class="owned-strip" style="--owner-color:${ownerColor}"><span>${safeText(ownerName)}</span></div>`
       : `<div class="tile-bottom"><span class="tile-price">${safeText(priceText)}</span></div>`;
 
     tileEl.title = tile.name || "Polje";
     tileEl.innerHTML = `
-      ${tile.type === "property" ? `<div class="group-glow" ${groupStyle}></div>` : ""}
+      ${["property", "stadium"].includes(tile.type) ? `<div class="group-glow" ${accentStyle}></div>` : ""}
       <div class="tile-name">
         <span class="tile-name-desktop">${safeText(getDesktopTileName(tile))}</span>
         <span class="tile-name-mobile">${safeText(getMobileTileName(tile))}</span>
       </div>
-      <div class="tile-icon-slot"><span class="tile-icon-content">${icon || ""}</span></div>
+      <div class="tile-icon-slot"><span class="tile-icon-content">${icon}</span></div>
       ${buildingMarker}
       ${bottomContent}
     `;
   });
+}
+
+function getTileIconHtml(tile) {
+  if (!tile) return "";
+  if (tile.type !== "stadium") return tile.icon || tile.emoji || "";
+  const level = Math.min(3, Math.max(0, Number(tile.houses) || 0));
+  return `
+    <span class="stadium-pitch stadium-level-${level}" aria-label="${safeText(getStadiumLevelLabel(level))}">
+      <span class="stadium-half-line"></span>
+      <span class="stadium-centre-circle"></span>
+      <span class="stadium-ball">⚽</span>
+      <span class="stadium-stand stadium-stand-top"></span>
+      <span class="stadium-stand stadium-stand-bottom"></span>
+      <span class="stadium-stand stadium-stand-left"></span>
+      <span class="stadium-stand stadium-stand-right"></span>
+    </span>
+  `;
+}
+
+function getBuildingMarkerHtml(tile) {
+  const level = Math.max(0, Number(tile?.houses) || 0);
+  if (level <= 0) return "";
+  if (tile.type === "stadium") {
+    return `<div class="building-marker stadium-marker"><span class="stadium-upgrade-badge">${level}/3</span></div>`;
+  }
+  if (tile.type !== "property") return "";
+  return `<div class="building-marker ${level === 5 ? "hotel-marker" : "house-marker"}">${getBuildingIconHtml(level)}</div>`;
 }
 
 function getBuildingIconHtml(houses) {
@@ -1008,7 +1068,7 @@ function makeTradeDetailSide(moneyAmount, tileIndexes) {
   if (tileIndexes.length) {
     parts.push(tileIndexes.map(tileIndex => {
       const tile = tiles[tileIndex];
-      const propertyColor = tile?.type === "property" ? tile.color : tile?.type === "utility" ? "#00a28f" : "#607d8b";
+      const propertyColor = ["property", "stadium"].includes(tile?.type) ? tile.color : tile?.type === "utility" ? "#00a28f" : "#607d8b";
       return `<div class="trade-detail-property"><span class="trade-property-color" style="--property-color:${propertyColor}"></span>${safeText(tile?.name || "Polje")}</div>`;
     }).join(""));
   }
@@ -1399,8 +1459,8 @@ function makeTradePropertyButton(tileIndex, side) {
   const tile = tiles[tileIndex];
   const selectedTiles = side === "from" ? (activeTradeDraft?.fromTiles || []) : (activeTradeDraft?.toTiles || []);
   const selected = selectedTiles.includes(tileIndex);
-  const propertyColor = tile.type === "property" ? tile.color : tile.type === "utility" ? "#00a28f" : "#607d8b";
-  const extra = tile.type === "property" && tile.houses ? ` · ${tile.houses === 5 ? "hotel" : `${tile.houses} kuća`}` : "";
+  const propertyColor = ["property", "stadium"].includes(tile.type) ? tile.color : tile.type === "utility" ? "#00a28f" : "#607d8b";
+  const extra = tile.type === "stadium" && tile.houses ? ` · ${getStadiumLevelLabel(tile.houses)}` : tile.type === "property" && tile.houses ? ` · ${tile.houses === 5 ? "hotel" : `${tile.houses} kuća`}` : "";
 
   return `
     <button type="button" class="trade-property-row trade-property-button ${selected ? "selected" : ""}" onclick="toggleTradeTile('${side}', ${tileIndex})">
@@ -1558,32 +1618,52 @@ function getBuildingLabel(houses) {
   return `${level} kuć${level === 1 ? "a" : "e"}`;
 }
 
+function getStadiumLevelLabel(level) {
+  const safeLevel = Math.min(3, Math.max(0, Number(level) || 0));
+  return ["Fudbalski teren", "Teren sa tribinom", "Sportski kompleks", "Stadion"][safeLevel];
+}
+
+function getMaxBuildingLevel(tile) {
+  return tile?.type === "stadium" ? 3 : 5;
+}
+
 function getBuildingBuildCost(tile) {
-  const level = Math.min(5, Math.max(0, Number(tile?.houses) || 0));
+  const maxLevel = getMaxBuildingLevel(tile);
+  const level = Math.min(maxLevel, Math.max(0, Number(tile?.houses) || 0));
+  if (level >= maxLevel) return 0;
+  if (tile?.type === "stadium") {
+    const costs = Array.isArray(tile.upgradeCosts) ? tile.upgradeCosts : [100, 150, 200];
+    return Math.max(0, Math.floor(Number(costs[level]) || 0));
+  }
   const baseCost = Math.max(0, Math.floor(Number(tile?.houseCost) || 0));
-  if (level >= 5) return 0;
   if (level === 4) return baseCost + 125;
   return baseCost + level * 25;
 }
 
 function getBuildingSellRefund(tile) {
-  const level = Math.min(5, Math.max(0, Number(tile?.houses) || 0));
+  const maxLevel = getMaxBuildingLevel(tile);
+  const level = Math.min(maxLevel, Math.max(0, Number(tile?.houses) || 0));
   if (level <= 0) return 0;
+  if (tile?.type === "stadium") {
+    const costs = Array.isArray(tile.upgradeCosts) ? tile.upgradeCosts : [100, 150, 200];
+    return Math.floor(Math.max(0, Number(costs[level - 1]) || 0) / 2);
+  }
   const baseCost = Math.max(0, Math.floor(Number(tile?.houseCost) || 0));
   const originalCost = level === 5 ? baseCost + 125 : baseCost + (level - 1) * 25;
   return Math.floor(originalCost / 2);
 }
 
 function canBuildClient(tile, ownerIndex) {
-  if (!tile || tile.type !== "property") return { ok: false, reason: "Samo gradovi mogu da imaju objekte." };
+  if (!tile || !["property", "stadium"].includes(tile.type)) return { ok: false, reason: "Na ovom polju nema gradnje." };
   const player = players[ownerIndex];
   if (!player || player.bankrupt) return { ok: false, reason: "Vlasnik je bankrotirao." };
   if (roomStatus !== "playing" || gameOver) return { ok: false, reason: "Igra nije aktivna." };
   if (ownerIndex !== currentPlayerIndex) return { ok: false, reason: "Možeš da gradiš samo tokom svog poteza." };
   if (tile.owner !== ownerIndex) return { ok: false, reason: "Ne poseduješ ovo polje." };
-  if (!ownsFullGroup(ownerIndex, tile.group)) return { ok: false, reason: "Prvo moraš da poseduješ ceo set." };
+  if (tile.type === "property" && !ownsFullGroup(ownerIndex, tile.group)) return { ok: false, reason: "Prvo moraš da poseduješ ceo set." };
   if (player.money <= 0) return { ok: false, reason: "Prvo reši dug." };
-  if ((tile.houses || 0) >= 5) return { ok: false, reason: "Hotel je već izgrađen." };
+  const maxLevel = getMaxBuildingLevel(tile);
+  if ((tile.houses || 0) >= maxLevel) return { ok: false, reason: tile.type === "stadium" ? "Stadion je već potpuno izgrađen." : "Hotel je već izgrađen." };
   const cost = getBuildingBuildCost(tile);
   if (player.money < cost) return { ok: false, reason: "Nema dovoljno novca." };
   return { ok: true, reason: "OK" };
@@ -1643,6 +1723,50 @@ function renderTileInfoCard() {
 function getTileInfoHtml(tile, index) {
   const closeButton = `<button class="info-close" onclick="hideTileInfo()" aria-label="Close">×</button>`;
 
+  if (tile.type === "stadium") {
+    const owner = tile.owner !== null ? players[tile.owner]?.name : "Banka";
+    const myIndex = myPlayerIndex();
+    const isMine = tile.owner === myIndex;
+    const currentLevel = Math.min(3, Math.max(0, Number(tile.houses) || 0));
+    const activeRent = tile.rentLevels[currentLevel] || tile.rent;
+    const nextCost = getBuildingBuildCost(tile);
+    const sellRefund = getBuildingSellRefund(tile);
+    const buildCheck = isMine ? canBuildClient(tile, myIndex) : { ok: false, reason: "Samo vlasnik može da unapređuje stadion." };
+    const canSellUpgrade = isMine && currentLevel > 0;
+    const controls = isMine
+      ? `<div class="building-controls stadium-controls">
+          <div class="building-status">
+            <span>Razvoj stadiona</span>
+            <strong>${safeText(getStadiumLevelLabel(currentLevel))}</strong>
+            <small>Trenutna renta: ${money(activeRent)}</small>
+          </div>
+          <div class="building-buttons">
+            <button onclick="changeBuilding(${index}, -1)" ${canSellUpgrade ? "" : "disabled"}>▼ Prodaj nivo<small>+${money(sellRefund)}</small></button>
+            <button onclick="changeBuilding(${index}, 1)" ${buildCheck.ok ? "" : "disabled"}>▲ ${currentLevel === 2 ? "Izgradi stadion" : "Unapredi teren"}<small>-${money(nextCost)}</small></button>
+          </div>
+          <p class="building-note">Počinje kao fudbalski teren. Tri unapređenja vode do punog stadiona.${buildCheck.ok ? "" : ` ${safeText(buildCheck.reason)}`}</p>
+        </div>`
+      : "";
+
+    return `
+      ${closeButton}
+      <div class="info-card stadium-card" style="--card-accent:${tile.color}">
+        <div class="info-accent"></div>
+        <div class="info-big-icon stadium-info-icon">${getTileIconHtml(tile)}</div>
+        <h3>${safeText(tile.name)}</h3>
+        <p class="info-subline">Fudbalski objekat · vlasnik: ${safeText(owner)}</p>
+        <p class="info-set-line">Ne zahteva set — vlasnik ga unapređuje samostalno.</p>
+        <div class="info-table">
+          <div class="info-row info-head"><span>nivo</span><span>renta</span></div>
+          ${tile.rentLevels.map((rent, level) => `<div class="info-row ${currentLevel === level ? "active-rent-row" : ""}"><span>${safeText(getStadiumLevelLabel(level))}</span><strong>${money(rent)}</strong></div>`).join("")}
+        </div>
+        <div class="info-divider"></div>
+        <div class="info-footer one-col"><div><span>Cena</span><strong>${money(tile.price)}</strong></div></div>
+        ${controls}
+      </div>
+    `;
+  }
+
   if (tile.type === "property") {
     const owner = tile.owner !== null ? players[tile.owner]?.name : "Banka";
     const groupCities = getGroupTiles(tile.group).map(groupTile => groupTile.name).join(" + ");
@@ -1682,7 +1806,7 @@ function getTileInfoHtml(tile, index) {
       <div class="info-card property-card" style="--card-accent:${tile.color}">
         <div class="info-accent"></div>
         <h3>${safeText(tile.name)}</h3>
-        <p class="info-subline">${safeText(tile.group)} set · vlasnik: ${safeText(owner)}</p>
+        <p class="info-subline">${safeText(tile.areaType || "Opština")}${tile.municipality ? ` · opština ${safeText(tile.municipality)}` : ""} · ${safeText(tile.group)} set · vlasnik: ${safeText(owner)}</p>
         <p class="info-set-line">${safeText(fullSetText)}</p>
 
         <div class="info-table">
@@ -1716,10 +1840,7 @@ function getTileInfoHtml(tile, index) {
         <p class="info-subline">Prevoz · vlasnik: ${safeText(owner)}</p>
         <div class="info-table">
           <div class="info-row info-head"><span>kada</span><span>dobijaš</span></div>
-          <div class="info-row"><span>poseduje 1 prevoz</span><strong>${money(tile.rentLevels[0])}</strong></div>
-          <div class="info-row"><span>poseduje 2 prevoza</span><strong>${money(tile.rentLevels[1])}</strong></div>
-          <div class="info-row"><span>poseduje 3 prevoza</span><strong>${money(tile.rentLevels[2])}</strong></div>
-          <div class="info-row"><span>poseduje 4 prevoza</span><strong>${money(tile.rentLevels[3])}</strong></div>
+          ${tile.rentLevels.map((rent, level) => `<div class="info-row"><span>poseduje ${level + 1} prevoz${level === 0 ? "" : "a"}</span><strong>${money(rent)}</strong></div>`).join("")}
         </div>
         <div class="info-divider"></div>
         <div class="info-footer one-col"><div><span>Cena</span><strong>${money(tile.price)}</strong></div></div>

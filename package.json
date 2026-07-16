@@ -1,7 +1,7 @@
 {
   "name": "serbia-property-board-game-online",
-  "version": "1.0.0",
-  "description": "Simple online Serbian property board game with Socket.IO rooms.",
+  "version": "1.1.0",
+  "description": "Online Srpski Tajkun build with a 13x13 Belgrade municipality board, transit tiles and upgradable stadiums.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

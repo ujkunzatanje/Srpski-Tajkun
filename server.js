@@ -15,6 +15,9 @@ const ROOM_IDLE_DELETE_MS = 30 * 60 * 1000;
 const ENDED_ROOM_DELETE_MS = 5 * 60 * 1000;
 const JAIL_FEE = 140;
 const ADMIN_STATS_KEY = process.env.ADMIN_STATS_KEY || 'kuntaj1312';
+const BOARD_SIDE_LENGTH = 13;
+const BOARD_TILE_COUNT = 48;
+const JAIL_TILE_INDEX = 12;
 
 const app = express();
 const server = http.createServer(app);
@@ -51,22 +54,41 @@ function money(amount) {
 }
 
 const mobileShortNames = {
-  'Beograd': 'BG',
-  'Novi Sad': 'NS',
-  'Sremska Mitrovica': 'S. Mit.',
-  'Kragujevac': 'KG',
-  'Kraljevo': 'KR',
-  'Kruševac': 'KŠ',
-  'Zrenjanin': 'ZR',
-  'Smederevo': 'SD',
-  'Pančevo': 'PA',
-  'Novi Pazar': 'NP',
-  'Aerodrom Nikola Tesla': 'N. Tesla',
-  'Aerodrom Niš': 'Aer. Niš',
-  'Autobuska stanica': 'Bus',
-  'Železnička stanica': 'Voz',
-  'Porez na luksuz': 'Luksuz',
+  'Lazarevac': 'Laz.',
+  'Barajevo': 'Bar.',
+  'Mladenovac': 'Mlad.',
+  'Grocka': 'Gro.',
+  'Obrenovac': 'Obr.',
+  'Batajnica': 'Bat.',
+  'Sopot': 'Sop.',
+  'Borča': 'Bor.',
+  'Surčin': 'Sur.',
+  'Rakovica': 'Rak.',
+  'Železnik': 'Žel.',
+  'Palilula': 'Pal.',
+  'Čukarica': 'Čuk.',
+  'Zemun': 'Zem.',
+  'Mirijevo': 'Mir.',
+  'Zvezdara': 'Zvez.',
+  'Karaburma': 'Karb.',
+  'Voždovac': 'Vožd.',
+  'Banovo brdo': 'B. brdo',
+  'Gardoš': 'Gard.',
+  'Novi Beograd': 'NBG',
+  'Dedinje': 'Ded.',
+  'Vračar': 'Vrač.',
+  'Dorćol': 'Dor.',
+  'Stari grad': 'S. grad',
+  'Savski venac': 'S. venac',
+  'Stadion Partizana': 'Partizan',
+  'Stadion Rajko Mitić': 'Zvezda',
+  'Beogradska autobuska stanica': 'BAS',
+  'Tramvajska stanica': 'Tramvaj',
+  'Trolejbuska stanica': 'Trola',
+  'BG Voz stanica': 'BG Voz',
+  'Autobuski terminal': 'Bus',
   'Porez na dobit': 'Porez',
+  'Porez na luksuz': 'Luksuz',
   'Idi u pritvor': 'Pritvor',
   'Pritvor / prolaz': 'Pritvor',
   'Vodovod': 'Voda',
@@ -80,30 +102,44 @@ function getMobileShortName(name) {
   return mobileShortNames[name] || name;
 }
 
-function cityDataByBoardOrder() {
+// The 17 official Belgrade municipalities are kept on the board. Nine well-known
+// neighbourhoods are added so the 13x13 board keeps the property density and pacing
+// of the smaller map. Ordering follows the broad 2025/2026 market-price hierarchy.
+function municipalityDataByBoardOrder() {
   return [
-    { name: 'Sombor', price: 60, group: 'Braon', color: '#6f4d3c' },
-    { name: 'Kikinda', price: 60, group: 'Braon', color: '#6f4d3c' },
-    { name: 'Zrenjanin', price: 100, group: 'Svetlo plava', color: '#6f86bf' },
-    { name: 'Kruševac', price: 110, group: 'Svetlo plava', color: '#6f86bf' },
-    { name: 'Kraljevo', price: 120, group: 'Svetlo plava', color: '#6f86bf' },
-    { name: 'Užice', price: 130, group: 'Roze', color: '#b047a7' },
-    { name: 'Čačak', price: 140, group: 'Roze', color: '#b047a7' },
-    { name: 'Subotica', price: 160, group: 'Roze', color: '#b047a7' },
-    { name: 'Smederevo', price: 180, group: 'Narandžasta', color: '#e97824' },
-    { name: 'Pančevo', price: 190, group: 'Narandžasta', color: '#e97824' },
-    { name: 'Novi Pazar', price: 200, group: 'Narandžasta', color: '#e97824' },
-    { name: 'Leskovac', price: 210, group: 'Crvena', color: '#d34152' },
-    { name: 'Šabac', price: 220, group: 'Crvena', color: '#d34152' },
-    { name: 'Valjevo', price: 240, group: 'Crvena', color: '#d34152' },
-    { name: 'Jagodina', price: 260, group: 'Žuta', color: '#d7ac2a' },
-    { name: 'Sremska Mitrovica', price: 270, group: 'Žuta', color: '#d7ac2a' },
-    { name: 'Kragujevac', price: 280, group: 'Žuta', color: '#d7ac2a' },
-    { name: 'Niš', price: 290, group: 'Zelena', color: '#269657' },
-    { name: 'Zemun', price: 300, group: 'Zelena', color: '#269657' },
-    { name: 'Novi Sad', price: 320, group: 'Zelena', color: '#269657' },
-    { name: 'Zlatibor', price: 360, group: 'Tamno plava', color: '#2f3f94' },
-    { name: 'Beograd', price: 400, group: 'Tamno plava', color: '#2f3f94' }
+    { name: 'Lazarevac', price: 60, group: 'Braon', color: '#6f4d3c', areaType: 'Opština' },
+    { name: 'Barajevo', price: 60, group: 'Braon', color: '#6f4d3c', areaType: 'Opština' },
+
+    { name: 'Mladenovac', price: 100, group: 'Svetlo plava', color: '#6f86bf', areaType: 'Opština' },
+    { name: 'Grocka', price: 110, group: 'Svetlo plava', color: '#6f86bf', areaType: 'Opština' },
+    { name: 'Obrenovac', price: 120, group: 'Svetlo plava', color: '#6f86bf', areaType: 'Opština' },
+
+    { name: 'Batajnica', price: 130, group: 'Roze', color: '#b047a7', areaType: 'Naselje', municipality: 'Zemun' },
+    { name: 'Sopot', price: 140, group: 'Roze', color: '#b047a7', areaType: 'Opština' },
+    { name: 'Borča', price: 160, group: 'Roze', color: '#b047a7', areaType: 'Naselje', municipality: 'Palilula' },
+
+    { name: 'Surčin', price: 180, group: 'Narandžasta', color: '#e97824', areaType: 'Opština' },
+    { name: 'Rakovica', price: 190, group: 'Narandžasta', color: '#e97824', areaType: 'Opština' },
+    { name: 'Železnik', price: 200, group: 'Narandžasta', color: '#e97824', areaType: 'Naselje', municipality: 'Čukarica' },
+
+    { name: 'Palilula', price: 210, group: 'Crvena', color: '#d34152', areaType: 'Opština' },
+    { name: 'Čukarica', price: 220, group: 'Crvena', color: '#d34152', areaType: 'Opština' },
+    { name: 'Zemun', price: 240, group: 'Crvena', color: '#d34152', areaType: 'Opština' },
+
+    { name: 'Mirijevo', price: 260, group: 'Žuta', color: '#d7ac2a', areaType: 'Naselje', municipality: 'Zvezdara' },
+    { name: 'Zvezdara', price: 270, group: 'Žuta', color: '#d7ac2a', areaType: 'Opština' },
+    { name: 'Karaburma', price: 280, group: 'Žuta', color: '#d7ac2a', areaType: 'Naselje', municipality: 'Palilula' },
+    { name: 'Voždovac', price: 290, group: 'Žuta', color: '#d7ac2a', areaType: 'Opština' },
+
+    { name: 'Banovo brdo', price: 300, group: 'Zelena', color: '#269657', areaType: 'Naselje', municipality: 'Čukarica' },
+    { name: 'Gardoš', price: 320, group: 'Zelena', color: '#269657', areaType: 'Naselje', municipality: 'Zemun' },
+    { name: 'Novi Beograd', price: 340, group: 'Zelena', color: '#269657', areaType: 'Opština' },
+    { name: 'Dedinje', price: 350, group: 'Zelena', color: '#269657', areaType: 'Naselje', municipality: 'Savski venac' },
+
+    { name: 'Vračar', price: 360, group: 'Tamno plava', color: '#2f3f94', areaType: 'Opština' },
+    { name: 'Dorćol', price: 380, group: 'Tamno plava', color: '#2f3f94', areaType: 'Naselje', municipality: 'Stari grad' },
+    { name: 'Stari grad', price: 400, group: 'Tamno plava', color: '#2f3f94', areaType: 'Opština' },
+    { name: 'Savski venac', price: 420, group: 'Tamno plava', color: '#2f3f94', areaType: 'Opština' }
   ];
 }
 
@@ -127,8 +163,12 @@ const rentTableByPrice = {
   290: [25, 120, 380, 850, 1050, 1250],
   300: [26, 140, 400, 950, 1150, 1300],
   320: [30, 140, 440, 1000, 1200, 1400],
+  340: [32, 155, 475, 1050, 1260, 1450],
+  350: [34, 165, 510, 1100, 1310, 1500],
   360: [35, 180, 550, 1150, 1350, 1525],
-  400: [50, 200, 600, 1400, 1700, 2000]
+  380: [42, 190, 575, 1275, 1525, 1775],
+  400: [50, 200, 600, 1400, 1700, 2000],
+  420: [55, 220, 650, 1500, 1800, 2150]
 };
 
 function buildingCostForPrice(price) {
@@ -138,50 +178,76 @@ function buildingCostForPrice(price) {
   return 200;
 }
 
+function getMaxBuildingLevel(tile) {
+  return tile?.type === 'stadium' ? 3 : 5;
+}
+
 function getBuildingBuildCost(tile) {
-  const level = Math.min(5, Math.max(0, Number(tile?.houses) || 0));
+  const maxLevel = getMaxBuildingLevel(tile);
+  const level = Math.min(maxLevel, Math.max(0, Number(tile?.houses) || 0));
+  if (level >= maxLevel) return 0;
+  if (tile?.type === 'stadium') {
+    const costs = Array.isArray(tile.upgradeCosts) ? tile.upgradeCosts : [100, 150, 200];
+    return Math.max(0, Math.floor(Number(costs[level]) || 0));
+  }
   const baseCost = Math.max(0, Math.floor(Number(tile?.houseCost) || 0));
-  if (level >= 5) return 0;
   if (level === 4) return baseCost + 125;
   return baseCost + level * 25;
 }
 
 function getBuildingSellRefund(tile) {
-  const level = Math.min(5, Math.max(0, Number(tile?.houses) || 0));
+  const maxLevel = getMaxBuildingLevel(tile);
+  const level = Math.min(maxLevel, Math.max(0, Number(tile?.houses) || 0));
   if (level <= 0) return 0;
+  if (tile?.type === 'stadium') {
+    const costs = Array.isArray(tile.upgradeCosts) ? tile.upgradeCosts : [100, 150, 200];
+    return Math.floor(Math.max(0, Number(costs[level - 1]) || 0) / 2);
+  }
   const baseCost = Math.max(0, Math.floor(Number(tile?.houseCost) || 0));
   const originalCost = level === 5 ? baseCost + 125 : baseCost + (level - 1) * 25;
   return Math.floor(originalCost / 2);
 }
 
-function makeProperty(city) {
-  let rentLevels = rentTableByPrice[city.price] || [city.price * 0.1, city.price * 0.5, city.price * 1.5, city.price * 4, city.price * 5, city.price * 6].map(Math.round);
-
-  if (city.name === 'Kikinda') {
-    rentLevels = [4, 20, 60, 190, 330, 460];
-  }
-
-  const houseCost = city.name === 'Sombor' ? 15 : buildingCostForPrice(city.price);
-
+function makeProperty(area) {
+  const rentLevels = rentTableByPrice[area.price] || [area.price * 0.1, area.price * 0.5, area.price * 1.5, area.price * 4, area.price * 5, area.price * 6].map(Math.round);
+  const houseCost = buildingCostForPrice(area.price);
   return {
     type: 'property',
-    name: city.name,
-    price: city.price,
+    name: area.name,
+    price: area.price,
     rent: rentLevels[0],
     rentLevels,
     houseCost,
     hotelCost: houseCost + 125,
     houses: 0,
-    group: city.group,
-    color: city.color,
+    group: area.group,
+    color: area.color,
+    areaType: area.areaType || 'Opština',
+    municipality: area.municipality || null,
     icon: '🏙️',
     owner: null,
-    mobileShortName: getMobileShortName(city.name)
+    mobileShortName: getMobileShortName(area.name)
+  };
+}
+
+function makeStadium(name, clubColor) {
+  return {
+    type: 'stadium',
+    name,
+    price: 250,
+    rent: 20,
+    rentLevels: [20, 80, 220, 600],
+    upgradeCosts: [100, 150, 200],
+    houses: 0,
+    color: clubColor,
+    icon: '⚽',
+    owner: null,
+    mobileShortName: getMobileShortName(name)
   };
 }
 
 function makeTransport(name, icon) {
-  return { type: 'transport', name, price: 200, rent: 25, rentLevels: [25, 50, 100, 200], color: '#455a64', icon, owner: null, mobileShortName: getMobileShortName(name) };
+  return { type: 'transport', name, price: 200, rent: 25, rentLevels: [25, 50, 100, 200, 300], color: '#455a64', icon, owner: null, mobileShortName: getMobileShortName(name) };
 }
 
 function makeUtility(name, icon) {
@@ -189,50 +255,66 @@ function makeUtility(name, icon) {
 }
 
 function makeTiles() {
-  const cities = cityDataByBoardOrder();
+  const areas = municipalityDataByBoardOrder();
   let p = 0;
   const tiles = [
     { type: 'start', name: 'START', emoji: '▶', text: `Stani ${money(LAND_START_BONUS)} / prođi ${money(PASS_START_BONUS)}` },
-    makeProperty(cities[p++]),
+    makeProperty(areas[p++]),
     { type: 'treasure', name: 'Blago', emoji: '🎁', text: 'Izvuci kartu' },
-    makeProperty(cities[p++]),
+    makeProperty(areas[p++]),
     { type: 'tax', name: 'Porez na dobit', emoji: '💸', taxMode: 'percent', percent: 10, text: 'Plati 10% novca u Odmor' },
-    makeTransport('Aerodrom Niš', '✈️'),
-    makeProperty(cities[p++]),
-    makeProperty(cities[p++]),
+    makeTransport('Beogradska autobuska stanica', '🚌'),
+    makeProperty(areas[p++]),
+    makeProperty(areas[p++]),
     { type: 'event', name: 'Karta', emoji: '?', text: 'Izvuci kartu' },
-    makeProperty(cities[p++]),
+    makeProperty(areas[p++]),
+    makeProperty(areas[p++]),
+    makeProperty(areas[p++]),
     { type: 'jail', name: 'Pritvor / prolaz', emoji: '🚓', text: 'Samo prolaz' },
-    makeProperty(cities[p++]),
+
+    makeProperty(areas[p++]),
     makeUtility('EPS', '⚡'),
-    makeProperty(cities[p++]),
-    makeProperty(cities[p++]),
-    makeTransport('Železnička stanica', '🚆'),
-    makeProperty(cities[p++]),
+    makeProperty(areas[p++]),
+    makeProperty(areas[p++]),
+    makeTransport('Tramvajska stanica', '🚋'),
+    makeProperty(areas[p++]),
     { type: 'treasure', name: 'Blago', emoji: '🎁', text: 'Izvuci kartu' },
-    makeProperty(cities[p++]),
-    makeProperty(cities[p++]),
+    makeProperty(areas[p++]),
+    makeProperty(areas[p++]),
+    makeStadium('Stadion Partizana', '#111111'),
+    makeProperty(areas[p++]),
     { type: 'rest', name: 'Odmor', emoji: '🏝️', text: 'Pokupi fond' },
-    makeProperty(cities[p++]),
+
+    makeProperty(areas[p++]),
     { type: 'event', name: 'Karta', emoji: '?', text: 'Izvuci kartu' },
-    makeProperty(cities[p++]),
-    makeProperty(cities[p++]),
-    makeTransport('Autobuska stanica', '🚌'),
-    makeProperty(cities[p++]),
+    makeProperty(areas[p++]),
+    makeProperty(areas[p++]),
+    makeTransport('Trolejbuska stanica', '🚎'),
+    makeProperty(areas[p++]),
     makeUtility('Vodovod', '🚰'),
-    makeProperty(cities[p++]),
-    makeProperty(cities[p++]),
-    { type: 'goToJail', name: 'Idi u pritvor', emoji: '👮', text: 'Idi u pritvor' },
-    makeProperty(cities[p++]),
-    makeProperty(cities[p++]),
+    makeProperty(areas[p++]),
     { type: 'treasure', name: 'Blago', emoji: '🎁', text: 'Izvuci kartu' },
-    makeProperty(cities[p++]),
-    makeTransport('Aerodrom Nikola Tesla', '✈️'),
+    makeProperty(areas[p++]),
+    makeProperty(areas[p++]),
+    { type: 'goToJail', name: 'Idi u pritvor', emoji: '👮', text: 'Idi u pritvor' },
+
+    makeProperty(areas[p++]),
+    makeTransport('BG Voz stanica', '🚆'),
+    makeProperty(areas[p++]),
+    makeStadium('Stadion Rajko Mitić', '#d71920'),
+    { type: 'treasure', name: 'Blago', emoji: '🎁', text: 'Izvuci kartu' },
+    makeProperty(areas[p++]),
+    makeTransport('Autobuski terminal', '🚏'),
     { type: 'event', name: 'Karta', emoji: '?', text: 'Izvuci kartu' },
-    makeProperty(cities[p++]),
+    makeProperty(areas[p++]),
     { type: 'tax', name: 'Porez na luksuz', emoji: '💎', amount: 140, text: `Plati ${money(140)} u Odmor` },
-    makeProperty(cities[p++])
+    makeProperty(areas[p++])
   ];
+
+  if (tiles.length !== BOARD_TILE_COUNT || p !== areas.length) {
+    throw new Error(`Neispravna tabla: ${tiles.length} polja, iskorišćeno ${p}/${areas.length} lokacija.`);
+  }
+
   tiles.forEach(tile => {
     if (!tile.mobileShortName) tile.mobileShortName = getMobileShortName(tile.name);
   });
@@ -861,8 +943,8 @@ io.on('connection', socket => {
       to: requestedTo,
       fromMoney: clampMoney(payload.fromMoney),
       toMoney: clampMoney(payload.toMoney),
-      fromTiles: uniqueTileIndexes(payload.fromTiles),
-      toTiles: uniqueTileIndexes(payload.toTiles),
+      fromTiles: uniqueTileIndexes(payload.fromTiles, room.tiles.length),
+      toTiles: uniqueTileIndexes(payload.toTiles, room.tiles.length),
       conditions: cleanTradeConditions(payload.conditions),
       status: 'pending',
       kind: originalTrade ? 'counter' : 'offer',
@@ -975,13 +1057,16 @@ io.on('connection', socket => {
       const cost = getBuildingBuildCost(tile);
       player.money -= cost;
       tile.houses += 1;
-      recordBuilding(room, playerIndex, tileIndex, 'build', cost, tile.houses === 5 ? 'hotel' : 'house');
-      const buildingName = tile.houses === 5 ? 'hotel' : `kuću ${tile.houses}`;
+      const buildingType = tile.type === 'stadium' ? 'stadiumUpgrade' : (tile.houses === 5 ? 'hotel' : 'house');
+      recordBuilding(room, playerIndex, tileIndex, 'build', cost, buildingType);
+      const buildingName = tile.type === 'stadium'
+        ? `unapređenje ${tile.houses}/3`
+        : (tile.houses === 5 ? 'hotel' : `kuću ${tile.houses}`);
       addLog(room, `${player.name} je izgradio ${buildingName} na ${tile.name} za ${money(cost)}.`);
     } else {
       const refund = getBuildingSellRefund(tile);
-      const removedType = tile.houses === 5 ? 'hotel' : 'house';
-      const removedName = tile.houses === 5 ? 'hotel' : 'kuću';
+      const removedType = tile.type === 'stadium' ? 'stadiumUpgrade' : (tile.houses === 5 ? 'hotel' : 'house');
+      const removedName = tile.type === 'stadium' ? 'stadionsko unapređenje' : (tile.houses === 5 ? 'hotel' : 'kuću');
       tile.houses -= 1;
       player.money += refund;
       recordBuilding(room, playerIndex, tileIndex, 'sell', refund, removedType);
@@ -1134,8 +1219,10 @@ function makeStats(roomCode, tiles, players = []) {
       odmorPaid: 0,
       housesBuilt: 0,
       hotelsBuilt: 0,
+      stadiumUpgradesBuilt: 0,
       housesSold: 0,
-      hotelsSold: 0
+      hotelsSold: 0,
+      stadiumUpgradesSold: 0
     };
   });
 
@@ -1313,12 +1400,14 @@ function recordBuilding(room, playerIndex, tileIndex, direction, amount, buildin
   const pstats = getPlayerStatsByIndex(room, playerIndex);
   if (direction === 'build') {
     room.stats.economy.buildingSpendTotal += amount;
-    if (buildingType === 'hotel') tileStats.hotelsBuilt += 1;
+    if (buildingType === 'stadiumUpgrade') tileStats.stadiumUpgradesBuilt = (tileStats.stadiumUpgradesBuilt || 0) + 1;
+    else if (buildingType === 'hotel') tileStats.hotelsBuilt += 1;
     else tileStats.housesBuilt += 1;
     if (pstats) pstats.buildingSpend += amount;
   } else {
     room.stats.economy.buildingRefundTotal += amount;
-    if (buildingType === 'hotel') tileStats.hotelsSold += 1;
+    if (buildingType === 'stadiumUpgrade') tileStats.stadiumUpgradesSold = (tileStats.stadiumUpgradesSold || 0) + 1;
+    else if (buildingType === 'hotel') tileStats.hotelsSold += 1;
     else tileStats.housesSold += 1;
     if (pstats) pstats.buildingRefund += amount;
   }
@@ -1515,7 +1604,7 @@ function performRollDice(room, playerIndex, automatic) {
     player.jailRollAttempts = 0;
     room.doubleRollCount = 0;
     recordJail(room, playerIndex, 'threeDoubles');
-    directMove(room, player, 10, paths, false);
+    directMove(room, player, JAIL_TILE_INDEX, paths, false);
     room.actionText = `${automatic ? '⏱ ' : ''}${player.name} je bacio treće duple (${d1}+${d2}) i ide direktno u pritvor.`;
     addLog(room, room.actionText);
     room.landedTileIndex = player.position;
@@ -1765,7 +1854,7 @@ function handleTile(room, player, paths) {
     recordJail(room, room.players.indexOf(player), 'sentToJail');
     room.actionText = `${player.name} ide u pritvor. Ima 2 pokušaja da baci duple ili može da plati ${money(JAIL_FEE)}.`;
     addLog(room, room.actionText);
-    directMove(room, player, 10, paths, false);
+    directMove(room, player, JAIL_TILE_INDEX, paths, false);
     return;
   }
 
@@ -1835,7 +1924,7 @@ function drawEvent(room, player, paths) {
 }
 
 function isPurchasableTile(tile) {
-  return Boolean(tile && ['property', 'utility', 'transport'].includes(tile.type));
+  return Boolean(tile && ['property', 'stadium', 'utility', 'transport'].includes(tile.type));
 }
 
 function payBank(room, player, amount, reason) {
@@ -1923,7 +2012,7 @@ function kickPlayer(room, playerIndex) {
   room.tiles.forEach(tile => {
     if (isPurchasableTile(tile) && tile.owner === playerIndex) {
       tile.owner = null;
-      if (tile.type === 'property') tile.houses = 0;
+      if (tile.type === 'property' || tile.type === 'stadium') tile.houses = 0;
     }
   });
   room.trades.forEach(trade => {
@@ -1972,7 +2061,7 @@ function declareBankruptcy(room, playerIndex) {
   room.tiles.forEach(tile => {
     if (isPurchasableTile(tile) && tile.owner === playerIndex) {
       tile.owner = null;
-      if (tile.type === 'property') tile.houses = 0;
+      if (tile.type === 'property' || tile.type === 'stadium') tile.houses = 0;
     }
   });
   room.trades.forEach(trade => {
@@ -2017,19 +2106,20 @@ function validateBuildingAction(room, playerIndex, tileIndex, direction) {
   if (!player || player.bankrupt) return { ok: false, reason: 'Bankrotirao si.' };
   if (room.status !== 'playing' || room.gameOver) return { ok: false, reason: 'Igra nije aktivna.' };
   if (playerIndex !== room.currentPlayerIndex) return { ok: false, reason: 'Možeš da gradiš samo tokom svog poteza.' };
-  if (!tile || tile.type !== 'property') return { ok: false, reason: 'Samo gradovi mogu da imaju objekte.' };
+  if (!tile || !['property', 'stadium'].includes(tile.type)) return { ok: false, reason: 'Na ovom polju nema gradnje.' };
   if (tile.owner !== playerIndex) return { ok: false, reason: 'Ne poseduješ ovo polje.' };
-  if (!ownsFullGroup(room, playerIndex, tile.group)) return { ok: false, reason: 'Moraš da poseduješ ceo set pre gradnje.' };
+  if (tile.type === 'property' && !ownsFullGroup(room, playerIndex, tile.group)) return { ok: false, reason: 'Moraš da poseduješ ceo set pre gradnje.' };
 
-  tile.houses = Math.min(5, Math.max(0, Number(tile.houses) || 0));
+  const maxLevel = getMaxBuildingLevel(tile);
+  tile.houses = Math.min(maxLevel, Math.max(0, Number(tile.houses) || 0));
 
   if (direction > 0) {
     if (player.money <= 0) return { ok: false, reason: 'Prvo reši dug.' };
-    if (tile.houses >= 5) return { ok: false, reason: 'Ovo polje već ima hotel.' };
+    if (tile.houses >= maxLevel) return { ok: false, reason: tile.type === 'stadium' ? 'Stadion je već potpuno izgrađen.' : 'Ovo polje već ima hotel.' };
     const cost = getBuildingBuildCost(tile);
     if (player.money < cost) return { ok: false, reason: 'Nema dovoljno novca za gradnju.' };
-  } else {
-    if (tile.houses <= 0) return { ok: false, reason: 'Nema objekata za prodaju na ovom polju.' };
+  } else if (tile.houses <= 0) {
+    return { ok: false, reason: 'Nema objekata za prodaju na ovom polju.' };
   }
 
   return { ok: true, reason: 'OK' };
@@ -2048,6 +2138,10 @@ function getTileRent(room, tile, diceTotal) {
       return baseRent * 2;
     }
     return baseRent;
+  }
+  if (tile.type === 'stadium') {
+    const level = Math.min(3, Math.max(0, Number(tile.houses) || 0));
+    return tile.rentLevels[level] || tile.rent;
   }
   if (tile.type === 'transport') {
     const ownedCount = countOwnedTilesByType(room, tile.owner, 'transport');
@@ -2081,9 +2175,9 @@ function canAcceptTrade(room, trade) {
   return { ok: true, reason: 'OK' };
 }
 
-function uniqueTileIndexes(values) {
+function uniqueTileIndexes(values, tileCount = BOARD_TILE_COUNT) {
   if (!Array.isArray(values)) return [];
-  return [...new Set(values.map(Number).filter(value => Number.isInteger(value) && value >= 0 && value < 40))];
+  return [...new Set(values.map(Number).filter(value => Number.isInteger(value) && value >= 0 && value < tileCount))];
 }
 
 function clampMoney(value) {

@@ -1,34 +1,43 @@
-# Serbia Property Online — Render Deployment
+# Srpski Tajkun Online — Beograd 13×13
 
-This is the first online test version.
+Online verzija igre sa proširenom tablom od 48 polja, beogradskim opštinama i naseljima, pet vrsta gradskog prevoza i dva stadiona sa tri nivoa unapređenja.
 
-## What is included
+Detaljan raspored i početni balans nalaze se u `MAP_NOTES_BEOGRAD_13X13.md`.
+
+## Šta je uključeno
 
 - `server.js` — Node.js + Express + Socket.IO server
-- `package.json` — dependencies and start command
+- `package.json` — zavisnosti i start komanda
 - `public/index.html` — browser UI
-- `public/style.css` — styling
-- `public/client.js` — online browser logic
-- `render.yaml` — optional Render blueprint config
+- `public/style.css` — stilovi i 13×13 raspored table
+- `public/client.js` — online browser logika
+- `public/assets/` — prilagođene ikone kuće i hotela
+- `render.yaml` — opciona Render konfiguracija
 
-## How it works
+## Kako radi
 
-- One temporary room code per game.
-- 2–6 players.
-- No account system.
-- No database.
-- Game state is stored only in server memory.
-- If the server restarts or sleeps, the active room is lost.
-- When only one player remains, the game ends and the room is deleted later.
-- The browser sends a small heartbeat every 25 seconds while connected.
+- Jedan privremeni kod sobe po igri.
+- 2–6 igrača.
+- Bez naloga i baze podataka.
+- Stanje igre se čuva samo u memoriji servera.
+- Ako se server restartuje ili zaspi, aktivna soba nestaje.
+- Kada ostane samo jedan igrač, igra se završava i soba se kasnije briše.
+- Browser šalje mali heartbeat na 25 sekundi dok je povezan.
 
-## Render settings
+## Lokalno pokretanje
 
-Use these settings if Render asks manually:
+```bash
+npm install
+npm start
+```
+
+Zatim otvoriti `http://localhost:3000`.
+
+## Render podešavanja
 
 - Runtime: Node
 - Build Command: `npm install`
 - Start Command: `npm start`
 - Environment: `NODE_ENV=production`
 
-The server uses `process.env.PORT`, which is required for Render.
+Server koristi `process.env.PORT`, kako Render zahteva.
