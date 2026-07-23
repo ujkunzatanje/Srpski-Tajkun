@@ -16,6 +16,7 @@ const ENDED_ROOM_DELETE_MS = 5 * 60 * 1000;
 const JAIL_FEE = 140;
 const ADMIN_STATS_KEY = process.env.ADMIN_STATS_KEY || 'kuntaj1312';
 const DEFAULT_MAP_KEY = 'serbia';
+const RENT_FREE_MAX_LAPS = 5;
 
 const app = express();
 const server = http.createServer(app);
@@ -649,7 +650,7 @@ function cleanTradeConditions(rawConditions) {
     if (!group) continue;
 
     const percent = type === 'revenueShare' ? clampPercent(rawItem.percent ?? rawItem.revenueSharePercent, 0, 40) : 0;
-    const laps = type === 'rentFree' ? clampLaps(rawItem.laps ?? rawItem.circles ?? rawItem.rentFreeLaps, 1, 3) : 0;
+    const laps = type === 'rentFree' ? clampLaps(rawItem.laps ?? rawItem.circles ?? rawItem.rentFreeLaps, 1, RENT_FREE_MAX_LAPS) : 0;
     if (type === 'revenueShare' && percent <= 0) continue;
 
     const key = `${type}:${beneficiarySide}:${grantorSide}:${group}:${percent}:${laps}`;
@@ -775,7 +776,7 @@ function addTradeAgreement(room, trade) {
       grantor: grantorIndex,
       group: item.group,
       percent: item.type === 'revenueShare' ? clampPercent(item.percent, 0, 40) : 0,
-      laps: item.type === 'rentFree' ? clampLaps(item.laps, 1, 3) : 0,
+      laps: item.type === 'rentFree' ? clampLaps(item.laps, 1, RENT_FREE_MAX_LAPS) : 0,
       beneficiaryStartLaps: item.type === 'rentFree' ? (Number(beneficiary.laps) || 0) : null,
       rentFreeGroup: item.type === 'rentFree' ? item.group : null,
       revenueShareGroup: item.type === 'revenueShare' ? item.group : null,
@@ -786,7 +787,7 @@ function addTradeAgreement(room, trade) {
 
     room.agreements.push(agreement);
     if (item.type === 'rentFree') {
-      summary.push(`${beneficiary.name} ne plaća rentu ${clampLaps(item.laps, 1, 3)} krug/a na ${item.group} setu igrača ${grantor.name}`);
+      summary.push(`${beneficiary.name} ne plaća rentu ${clampLaps(item.laps, 1, RENT_FREE_MAX_LAPS)} krug/a na ${item.group} setu igrača ${grantor.name}`);
     } else {
       summary.push(`${grantor.name} plaća ${agreement.percent}% rente sa ${item.group} seta igraču ${beneficiary.name}`);
     }
@@ -795,21 +796,24 @@ function addTradeAgreement(room, trade) {
   if (summary.length) addLog(room, `📜 Uslov razmene: ${summary.join(' + ')}.`);
 }
 
+function getRemainingRentFreeLaps(room, agreement) {
+  if (!agreement || agreement.expired) return 0;
+  const beneficiary = room.players[agreement.beneficiary];
+  if (!beneficiary || beneficiary.bankrupt) return 0;
+  const duration = clampLaps(agreement.laps || agreement.rentFreeLaps || 1, 1, RENT_FREE_MAX_LAPS);
+  const startLaps = Number.isFinite(Number(agreement.beneficiaryStartLaps))
+    ? Number(agreement.beneficiaryStartLaps)
+    : 0;
+  return Math.max(0, startLaps + duration - (Number(beneficiary.laps) || 0));
+}
+
 function hasRentFreeAgreement(room, payerIndex, ownerIndex, groupName) {
-  const payer = room.players[payerIndex];
-  if (!payer) return false;
-  const payerLaps = Number(payer.laps) || 0;
   return (room.agreements || []).some(agreement => {
     if (agreement.beneficiary !== payerIndex) return false;
     if (agreement.grantor !== ownerIndex) return false;
     if (agreement.group !== groupName && agreement.rentFreeGroup !== groupName) return false;
     if (agreement.type !== 'rentFree' && !agreement.rentFreeGroup) return false;
-
-    const laps = clampLaps(agreement.laps || agreement.rentFreeLaps || 1, 1, 3);
-    const startLaps = Number.isFinite(Number(agreement.beneficiaryStartLaps))
-      ? Number(agreement.beneficiaryStartLaps)
-      : 0;
-    return payerLaps < startLaps + laps;
+    return getRemainingRentFreeLaps(room, agreement) > 0;
   });
 }
 
@@ -1896,23 +1900,20 @@ function incrementPlayerLap(room, player) {
   if (!player || player.bankrupt) return;
   player.laps = (Number(player.laps) || 0) + 1;
   const playerIndex = room.players.indexOf(player);
-  const expired = [];
+  const expiredIds = new Set();
 
   for (const agreement of room.agreements || []) {
     if (agreement.beneficiary !== playerIndex) continue;
     if (agreement.type !== 'rentFree' && !agreement.rentFreeGroup) continue;
-    const laps = clampLaps(agreement.laps || agreement.rentFreeLaps || 1, 1, 3);
-    const startLaps = Number.isFinite(Number(agreement.beneficiaryStartLaps))
-      ? Number(agreement.beneficiaryStartLaps)
-      : 0;
-    if (!agreement.expired && (Number(player.laps) || 0) >= startLaps + laps) {
+    if (getRemainingRentFreeLaps(room, agreement) <= 0) {
       agreement.expired = true;
-      expired.push(agreement);
+      expiredIds.add(agreement.id);
     }
   }
 
-  if (expired.length) {
-    addLog(room, `📜 ${player.name} je završio krug i jedan ili više uslova bez rente je isteklo.`);
+  if (expiredIds.size) {
+    room.agreements = (room.agreements || []).filter(agreement => !expiredIds.has(agreement.id));
+    addLog(room, `📜 ${player.name} je prošao START i istekao mu je ${expiredIds.size === 1 ? 'uslov' : 'jedan ili više uslova'} bez rente.`);
   }
 }
 
@@ -1929,6 +1930,7 @@ function movePlayer(room, player, steps, paths) {
     paths[playerIndex].push(newPosition);
     recordTilePassed(room, newPosition, playerIndex);
     if (direction > 0 && newPosition === 0) {
+      incrementPlayerLap(room, player);
       const landedOnStart = i === totalSteps - 1;
       const bonus = landedOnStart ? LAND_START_BONUS : PASS_START_BONUS;
       player.money += bonus;
@@ -1945,11 +1947,13 @@ function movePlayer(room, player, steps, paths) {
 function directMove(room, player, targetIndex, paths, collectStartBonus) {
   const playerIndex = room.players.indexOf(player);
   if (!paths[playerIndex]) paths[playerIndex] = [];
+  const previousPosition = player.position;
   player.position = targetIndex;
   room.landedTileIndex = targetIndex;
   paths[playerIndex].push(targetIndex);
   recordTileLanding(room, targetIndex, playerIndex);
   if (collectStartBonus) {
+    if (targetIndex === 0 && previousPosition !== 0) incrementPlayerLap(room, player);
     player.money += LAND_START_BONUS;
     recordStartBonus(room, playerIndex, LAND_START_BONUS, true);
     addLog(room, `${player.name} je dobio ${money(LAND_START_BONUS)} na STARTU.`);

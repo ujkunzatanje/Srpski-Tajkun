@@ -3,6 +3,7 @@ const LAND_START_BONUS = 300;
 const CURRENCY = "€";
 const MOVE_STEP_MS = 185;
 const DICE_ANIMATION_MS = 1000;
+const RENT_FREE_MAX_LAPS = 5;
 let boardSideLength = 11;
 let boardEdgeSteps = boardSideLength - 1;
 let boardTileCount = boardEdgeSteps * 4;
@@ -934,6 +935,57 @@ function getTileCenter(tileIndex, playerIndex) {
   };
 }
 
+function getRemainingAgreementCircles(agreement) {
+  if (!agreement || agreement.expired) return 0;
+  const beneficiary = players[agreement.beneficiary];
+  if (!beneficiary || beneficiary.bankrupt) return 0;
+  const duration = Math.max(1, Math.min(RENT_FREE_MAX_LAPS, Math.floor(Number(agreement.laps || agreement.rentFreeLaps) || 1)));
+  const startLaps = Number.isFinite(Number(agreement.beneficiaryStartLaps))
+    ? Number(agreement.beneficiaryStartLaps)
+    : 0;
+  return Math.max(0, startLaps + duration - (Number(beneficiary.laps) || 0));
+}
+
+function formatCircleCount(value, includePrefix = false) {
+  const count = Math.max(0, Math.floor(Number(value) || 0));
+  const noun = count === 1 ? "krug" : count >= 2 && count <= 4 ? "kruga" : "krugova";
+  return `${includePrefix ? "još " : ""}${count} ${noun}`;
+}
+
+function makePlayerAgreementsHtml(playerIndex) {
+  const activeItems = (agreements || []).filter(agreement => {
+    if (!agreement || agreement.expired) return false;
+    if (agreement.beneficiary !== playerIndex && agreement.grantor !== playerIndex) return false;
+    if (agreement.type === "rentFree" || agreement.rentFreeGroup) return getRemainingAgreementCircles(agreement) > 0;
+    return agreement.type === "revenueShare" || agreement.revenueShareGroup;
+  });
+
+  if (!activeItems.length) return "";
+
+  const rows = activeItems.map(agreement => {
+    const beneficiary = players[agreement.beneficiary];
+    const grantor = players[agreement.grantor];
+    if (!beneficiary || !grantor) return "";
+    const groupName = safeText(getGroupDisplayName(agreement.group || agreement.rentFreeGroup || agreement.revenueShareGroup));
+
+    if (agreement.type === "rentFree" || agreement.rentFreeGroup) {
+      const remaining = getRemainingAgreementCircles(agreement);
+      const roleText = playerIndex === agreement.beneficiary
+        ? `Ne plaćaš rentu igraču ${safeText(grantor.name)}`
+        : `${safeText(beneficiary.name)} ti ne plaća rentu`;
+      return `<div class="active-agreement-item rent-free-agreement"><span class="agreement-icon">🚫</span><span><strong>${roleText}</strong><small>${groupName} · ${formatCircleCount(remaining, true)}</small></span></div>`;
+    }
+
+    const percent = Math.max(0, Math.min(40, Math.floor(Number(agreement.percent ?? agreement.revenueSharePercent) || 0)));
+    const roleText = playerIndex === agreement.beneficiary
+      ? `Primaš ${percent}% rente od igrača ${safeText(grantor.name)}`
+      : `Daješ ${percent}% rente igraču ${safeText(beneficiary.name)}`;
+    return `<div class="active-agreement-item revenue-share-agreement"><span class="agreement-icon">📈</span><span><strong>${roleText}</strong><small>${groupName}</small></span></div>`;
+  }).filter(Boolean).join("");
+
+  return rows ? `<div class="active-agreements"><div class="active-agreements-title">Aktivni uslovi</div>${rows}</div>` : "";
+}
+
 function renderPlayers() {
   playersPanel.innerHTML = players.map((player, index) => {
     const propertiesOwned = tiles.filter(tile => isPurchasableTile(tile) && tile.owner === index).length;
@@ -951,6 +1003,7 @@ function renderPlayers() {
       : "";
     const smallKickButton = canHostKick ? `<button class="kick-button player-kick" onclick="kickPlayer('${player.id}', '${escapeJsString(player.name)}')">Izbaci</button>` : "";
     const debtTools = `${debtMessage}${canDeclareSelfBankruptcy ? `<button class="bankrupt-button" onclick="declareBankruptcy()">🏳 Proglasi bankrot</button>` : ""}`;
+    const agreementTools = makePlayerAgreementsHtml(index);
 
     return `
       <div class="player-card${currentClass}${bankruptClass}${debtClass}${disconnectedClass}${mineClass}">
@@ -971,6 +1024,7 @@ function renderPlayers() {
           <div>Celi setovi: <strong>${fullSetsOwned}</strong></div>
           ${debtTools}
         </div>
+        ${agreementTools}
       </div>
     `;
   }).join("");
@@ -1348,14 +1402,14 @@ function makeConditionGroupButtons(type, beneficiarySide, grantorSide, groups, s
 
 function makeConditionLapsButtons(beneficiarySide, grantorSide, condition) {
   if (!condition) return "";
-  const selectedLaps = Math.max(1, Math.min(3, Math.floor(Number(condition.laps) || 1)));
+  const selectedLaps = Math.max(1, Math.min(RENT_FREE_MAX_LAPS, Math.floor(Number(condition.laps) || 1)));
   return `
     <div class="condition-laps-control">
       <span>Važi koliko krugova?</span>
       <div class="condition-laps-buttons">
-        ${[1, 2, 3].map(laps => `
+        ${Array.from({ length: RENT_FREE_MAX_LAPS }, (_, index) => index + 1).map(laps => `
           <button type="button" class="condition-lap-button ${selectedLaps === laps ? "selected" : ""}" onclick="setTradeConditionLaps('${beneficiarySide}','${grantorSide}',${laps})">
-            ${laps} ${laps === 1 ? "krug" : "kruga"}
+            ${laps} ${laps === 1 ? "krug" : laps <= 4 ? "kruga" : "krugova"}
           </button>
         `).join("")}
       </div>
@@ -1417,7 +1471,7 @@ function setTradeConditionLaps(beneficiarySide, grantorSide, laps) {
   updateTradeDraftMoneyFromUi();
   const condition = findDraftCondition("rentFree", beneficiarySide, grantorSide);
   if (!condition) return;
-  condition.laps = Math.max(1, Math.min(3, Math.floor(Number(laps) || 1)));
+  condition.laps = Math.max(1, Math.min(RENT_FREE_MAX_LAPS, Math.floor(Number(laps) || 1)));
   renderTradeBuilder(activeTradeDraft.replaceTradeId ? "Pregovaraj i pošalji novu ponudu" : "Napravi razmenu");
 }
 
@@ -1475,14 +1529,14 @@ function normalizeTradeConditions(conditions = {}) {
           grantor: item.grantor === "from" ? "from" : "to",
           group: item.group || "",
           percent: Math.max(0, Math.min(40, Math.floor(Number(item.percent) || 0))),
-          laps: item.type === "rentFree" ? Math.max(1, Math.min(3, Math.floor(Number(item.laps) || 1))) : 0
+          laps: item.type === "rentFree" ? Math.max(1, Math.min(RENT_FREE_MAX_LAPS, Math.floor(Number(item.laps) || 1))) : 0
         }))
     };
   }
 
   const items = [];
   if (conditions.rentFreeEnabled && conditions.rentFreeGroup) {
-    items.push({ type: "rentFree", beneficiary: "from", grantor: "to", group: conditions.rentFreeGroup, percent: 0, laps: Math.max(1, Math.min(3, Math.floor(Number(conditions.rentFreeLaps || conditions.laps) || 1))) });
+    items.push({ type: "rentFree", beneficiary: "from", grantor: "to", group: conditions.rentFreeGroup, percent: 0, laps: Math.max(1, Math.min(RENT_FREE_MAX_LAPS, Math.floor(Number(conditions.rentFreeLaps || conditions.laps) || 1))) });
   }
   if (conditions.revenueShareEnabled && conditions.revenueShareGroup && Number(conditions.revenueSharePercent) > 0) {
     items.push({ type: "revenueShare", beneficiary: "from", grantor: "to", group: conditions.revenueShareGroup, percent: Number(conditions.revenueSharePercent) || 0 });
@@ -1512,7 +1566,7 @@ function makeTradeConditionsDetail(conditions = {}) {
     const beneficiaryText = item.beneficiary === "from" ? "Pošiljalac" : "Primalac";
     const grantorText = item.grantor === "from" ? "pošiljaoca" : "primaoca";
     if (item.type === "rentFree") {
-      return `<div class="trade-condition-pill">🚫 ${beneficiaryText} ne plaća rentu narednih <strong>${Math.max(1, Math.min(3, Math.floor(Number(item.laps) || 1)))} krug/a</strong> na setu ${grantorText}: <strong>${safeText(getGroupDisplayName(item.group))}</strong></div>`;
+      return `<div class="trade-condition-pill">🚫 ${beneficiaryText} ne plaća rentu narednih <strong>${formatCircleCount(Math.max(1, Math.min(RENT_FREE_MAX_LAPS, Math.floor(Number(item.laps) || 1))))}</strong> na setu ${grantorText}: <strong>${safeText(getGroupDisplayName(item.group))}</strong></div>`;
     }
     return `<div class="trade-condition-pill">📈 ${beneficiaryText} dobija <strong>${Number(item.percent) || 0}%</strong> rente sa seta ${grantorText}: <strong>${safeText(getGroupDisplayName(item.group))}</strong></div>`;
   });
