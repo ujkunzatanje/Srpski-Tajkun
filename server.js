@@ -1180,22 +1180,36 @@ io.on('connection', socket => {
     emitRoom(room);
   });
 
-  socket.on('game:building', (payload = {}) => {
+  socket.on('game:building', (payload = {}, acknowledge) => {
+    let acknowledged = false;
+    const reply = result => {
+      if (acknowledged || typeof acknowledge !== 'function') return;
+      acknowledged = true;
+      acknowledge(result);
+    };
+    const reject = message => {
+      if (typeof acknowledge === 'function') {
+        reply({ ok: false, error: message, requestId: payload.requestId || null });
+      } else {
+        emitError(socket, message);
+      }
+    };
+
     const room = getRoom(socket.data.roomCode);
-    if (!room) return emitError(socket, 'Soba nije pronađena.');
-    if (room.status !== 'playing' || room.gameOver) return emitError(socket, 'Igra nije aktivna.');
+    if (!room) return reject('Soba nije pronađena.');
+    if (room.status !== 'playing' || room.gameOver) return reject('Igra nije aktivna.');
 
     const playerIndex = findPlayerIndex(room, socket.data.playerId);
-    if (playerIndex < 0) return emitError(socket, 'Nisi u ovoj sobi.');
+    if (playerIndex < 0) return reject('Nisi u ovoj sobi.');
 
     const direction = Number(payload.direction) >= 0 ? 1 : -1;
     const tileIndex = Number(payload.tileIndex);
-    if (!Number.isInteger(tileIndex) || tileIndex < 0 || tileIndex >= room.tiles.length) return emitError(socket, 'Neispravno polje.');
+    if (!Number.isInteger(tileIndex) || tileIndex < 0 || tileIndex >= room.tiles.length) return reject('Neispravno polje.');
 
     const player = room.players[playerIndex];
     const tile = room.tiles[tileIndex];
     const validation = validateBuildingAction(room, playerIndex, tileIndex, direction);
-    if (!validation.ok) return emitError(socket, validation.reason);
+    if (!validation.ok) return reject(validation.reason);
 
     if (direction > 0) {
       const cost = getBuildingBuildCost(tile);
@@ -1221,6 +1235,14 @@ io.on('connection', socket => {
     room.actionText = `${player.name} je promenio objekte na ${tile.name}.`;
     touchRoom(room);
     emitRoom(room);
+    reply({
+      ok: true,
+      requestId: payload.requestId || null,
+      tileIndex,
+      direction,
+      buildingLevel: Number(tile.houses) || 0,
+      playerMoney: Number(player.money) || 0
+    });
   });
 
   socket.on('game:kick', (payload = {}) => {

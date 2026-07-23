@@ -1,6 +1,6 @@
 {
   "name": "serbia-property-board-game-online",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "Online Srpski Tajkun with selectable 11x11 Serbia cities and 13x13 Belgrade municipalities maps.",
   "main": "server.js",
   "scripts": {

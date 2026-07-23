@@ -51,6 +51,7 @@ let activeMapName = "Srbija — gradovi";
 let peekTimer = null;
 let tradeNoticeEl = null;
 let tradeNoticeTimer = null;
+let pendingBuildingAction = null;
 
 const setupColorChoices = [
   { name: "Plava", value: "#2f6bff" },
@@ -160,9 +161,11 @@ function connectSocket() {
 
   socket.on("disconnect", () => {
     setConnectionStatus("Prekinuta veza", "bad");
+    clearPendingBuildingAction();
   });
 
   socket.on("room:joined", payload => {
+    clearPendingBuildingAction();
     roomCode = payload.roomCode;
     myPlayerId = payload.playerId;
     isHost = Boolean(payload.isHost);
@@ -1751,9 +1754,48 @@ function declareBankruptcy() {
   socket.emit("game:bankrupt");
 }
 
+function isBuildingActionPending(tileIndex = null) {
+  if (!pendingBuildingAction) return false;
+  return tileIndex === null || Number(pendingBuildingAction.tileIndex) === Number(tileIndex);
+}
+
+function clearPendingBuildingAction(requestId = null) {
+  if (!pendingBuildingAction) return;
+  if (requestId && pendingBuildingAction.requestId !== requestId) return;
+  pendingBuildingAction = null;
+  renderTileInfoCard();
+}
+
 function changeBuilding(tileIndex, direction) {
   if (!socket || !socket.connected) return showError("Veza još nije spremna.");
-  socket.emit("game:building", { tileIndex, direction });
+  if (pendingBuildingAction) return;
+
+  const safeTileIndex = Number(tileIndex);
+  const safeDirection = Number(direction) >= 0 ? 1 : -1;
+  if (!Number.isInteger(safeTileIndex) || !tiles[safeTileIndex]) return showError("Neispravno polje.");
+
+  const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  pendingBuildingAction = {
+    requestId,
+    tileIndex: safeTileIndex,
+    direction: safeDirection
+  };
+  renderTileInfoCard();
+
+  socket.timeout(12000).emit(
+    "game:building",
+    { tileIndex: safeTileIndex, direction: safeDirection, requestId },
+    (timeoutError, response) => {
+      clearPendingBuildingAction(requestId);
+      if (timeoutError) {
+        showError("Server nije odgovorio na vreme. Proveri stanje polja pre ponovnog pokušaja.");
+        return;
+      }
+      if (response && response.ok === false) {
+        showError(response.error || "Server nije prihvatio promenu objekta.");
+      }
+    }
+  );
 }
 
 function getBuildingLabel(houses) {
@@ -1878,18 +1920,21 @@ function getTileInfoHtml(tile, index) {
     const sellRefund = getBuildingSellRefund(tile);
     const buildCheck = isMine ? canBuildClient(tile, myIndex) : { ok: false, reason: "Samo vlasnik može da unapređuje stadion." };
     const canSellUpgrade = isMine && currentLevel > 0;
+    const buildingActionLocked = isBuildingActionPending(index);
     const controls = isMine
-      ? `<div class="building-controls stadium-controls">
+      ? `<div class="building-controls stadium-controls${buildingActionLocked ? " request-pending" : ""}">
           <div class="building-status">
             <span>Razvoj stadiona</span>
             <strong>${safeText(getStadiumLevelLabel(currentLevel))}</strong>
             <small>Trenutna renta: ${money(activeRent)}</small>
           </div>
           <div class="building-buttons">
-            <button onclick="changeBuilding(${index}, -1)" ${canSellUpgrade ? "" : "disabled"}>▼ Prodaj nivo<small>+${money(sellRefund)}</small></button>
-            <button onclick="changeBuilding(${index}, 1)" ${buildCheck.ok ? "" : "disabled"}>▲ ${currentLevel === 2 ? "Izgradi stadion" : "Unapredi teren"}<small>-${money(nextCost)}</small></button>
+            <button onclick="changeBuilding(${index}, -1)" ${canSellUpgrade && !buildingActionLocked ? "" : "disabled"}>▼ Prodaj nivo<small>+${money(sellRefund)}</small></button>
+            <button onclick="changeBuilding(${index}, 1)" ${buildCheck.ok && !buildingActionLocked ? "" : "disabled"}>▲ ${currentLevel === 2 ? "Izgradi stadion" : "Unapredi teren"}<small>-${money(nextCost)}</small></button>
           </div>
-          <p class="building-note">Počinje kao fudbalski teren. Tri unapređenja vode do punog stadiona.${buildCheck.ok ? "" : ` ${safeText(buildCheck.reason)}`}</p>
+          ${buildingActionLocked
+            ? `<p class="building-request-status">Čeka se potvrda servera…</p>`
+            : `<p class="building-note">Počinje kao fudbalski teren. Tri unapređenja vode do punog stadiona.${buildCheck.ok ? "" : ` ${safeText(buildCheck.reason)}`}</p>`}
         </div>`
       : "";
 
@@ -1929,8 +1974,9 @@ function getTileInfoHtml(tile, index) {
     const sellRefund = getBuildingSellRefund(tile);
     const buildCheck = isMine ? canBuildClient(tile, myIndex) : { ok: false, reason: "Samo vlasnik može da gradi." };
     const canSellBuilding = isMine && currentLevel > 0;
+    const buildingActionLocked = isBuildingActionPending(index);
     const buildingControls = isMine
-      ? `<div class="building-controls">
+      ? `<div class="building-controls${buildingActionLocked ? " request-pending" : ""}">
           <div class="building-status">
             <span>Objekti</span>
             <strong>${safeText(getBuildingLabel(currentLevel))}</strong>
@@ -1938,10 +1984,12 @@ function getTileInfoHtml(tile, index) {
           </div>
           ${hasFullSet
             ? `<div class="building-buttons">
-                <button onclick="changeBuilding(${index}, -1)" ${canSellBuilding ? "" : "disabled"}>▼ Prodaj ${currentLevel === 5 ? "hotel" : "kuću"}<small>+${money(sellRefund)}</small></button>
-                <button onclick="changeBuilding(${index}, 1)" ${buildCheck.ok ? "" : "disabled"}>▲ ${currentLevel === 4 ? "Izgradi hotel" : "Izgradi kuću"}<small>-${money(nextCost)}</small></button>
+                <button onclick="changeBuilding(${index}, -1)" ${canSellBuilding && !buildingActionLocked ? "" : "disabled"}>▼ Prodaj ${currentLevel === 5 ? "hotel" : "kuću"}<small>+${money(sellRefund)}</small></button>
+                <button onclick="changeBuilding(${index}, 1)" ${buildCheck.ok && !buildingActionLocked ? "" : "disabled"}>▲ ${currentLevel === 4 ? "Izgradi hotel" : "Izgradi kuću"}<small>-${money(nextCost)}</small></button>
               </div>
-              <p class="building-note">Svaki ▲ dodaje jednu kuću. Posle 4 kuće, ▲ gradi hotel.${buildCheck.ok ? "" : ` ${safeText(buildCheck.reason)}`}</p>`
+              ${buildingActionLocked
+                ? `<p class="building-request-status">Čeka se potvrda servera…</p>`
+                : `<p class="building-note">Svaki ▲ dodaje jednu kuću. Posle 4 kuće, ▲ gradi hotel.${buildCheck.ok ? "" : ` ${safeText(buildCheck.reason)}`}</p>`}`
             : `<p class="building-note blocked">Moraš da poseduješ ceo ${safeText(tile.group)} set pre gradnje.</p>`}
         </div>`
       : "";
